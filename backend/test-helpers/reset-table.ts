@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { testDatabase } from "../src/config/database.config";
+import { database } from "../src/config/database.config";
 
 /**
  * `WARNING:` DO NOT USE THIS OUTSIDE OF TESTING.
@@ -14,6 +14,6 @@ export async function resetTable(tableName: string) {
     process.exit(1);
   }
 
-  const query = sql.raw(`TRUNCATE ${tableName} CASCADE`).compile(testDatabase);
-  await testDatabase.executeQuery(query);
+  const query = sql.raw(`TRUNCATE ${tableName} CASCADE`).compile(database);
+  await database.executeQuery(query);
 }

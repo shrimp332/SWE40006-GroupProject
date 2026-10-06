@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+
+# The runner publishes Postgres on a fixed port, so only one run may hold it at a time.
+concurrency:
+  group: tests
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    runs-on: self-hosted
+
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: swe40006-db
+      POSTGRES_PORT: 5436
+      DATABASE_URL: postgres://postgres:password@localhost:5436/swe40006-db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: backend/.nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Start database
+        run: docker compose up -d --wait db
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Run tests
+        run: npm test
+        working-directory: backend
+
+      - name: Tear down database
+        if: always()
+        run: docker compose down -v

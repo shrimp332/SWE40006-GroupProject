@@ -1,16 +1,23 @@
+import * as dotEnv from "dotenv";
 import { FileMigrationProvider, Kysely, Migrator, PostgresDialect, sql } from "kysely";
 import { Pool } from "pg";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { DB } from "../types/kysely-types";
 
+dotEnv.config();
+
+const { DATABASE_URL, NODE_ENV } = process.env;
+
+if (!DATABASE_URL) {
+  console.error("STOP \n \n");
+  console.error("DATABASE_URL is not set. Refusing to start without an explicit database connection string.");
+  process.exit(1);
+}
+
 export const PG_DIALECT = new PostgresDialect({
   pool: new Pool({
-    host: "swe40006-db",
-    port: 5432,
-    user: "postgres",
-    password: "password",
-    database: "swe40006-db",
+    connectionString: DATABASE_URL,
     idleTimeoutMillis: 60_000,
     connectionTimeoutMillis: 5_000,
     maxLifetimeSeconds: 60,
@@ -18,24 +25,9 @@ export const PG_DIALECT = new PostgresDialect({
   }),
 });
 
-export const TEST_PG_DIALECT = new PostgresDialect({
-  pool: new Pool({
-    host: "localhost",
-    port: 5436,
-    user: "postgres",
-    password: "password",
-    database: "test",
-  }),
-});
-
 export const database = new Kysely<DB>({
   dialect: PG_DIALECT,
-  log: ["error", "query"],
-});
-
-export const testDatabase = new Kysely<DB>({
-  dialect: TEST_PG_DIALECT,
-  log: ["error"],
+  log: NODE_ENV === "dev" ? ["error", "query"] : ["error"],
 });
 
 export async function testDatabaseConnection(): Promise<void> {

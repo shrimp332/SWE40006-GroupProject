@@ -1,8 +1,8 @@
 import dotEnv from "dotenv";
-import { FileMigrationProvider, Migrator, sql } from "kysely";
+import { FileMigrationProvider, Migrator } from "kysely";
 import { promises as fs } from "fs";
 import * as path from "path";
-import { testDatabase } from "../src/config/database.config";
+import { database } from "../src/config/database.config";
 
 dotEnv.config();
 
@@ -10,18 +10,10 @@ export default async function () {
   console.log("GLOBAL SETUP");
   process.env.NODE_ENV = "testing";
 
-  console.info("Checking if test database exits...");
-  const checkIfDatabaseExists = await sql`SELECT 1 as exists FROM pg_database WHERE datname = 'test'`.execute(testDatabase);
-
-  if (checkIfDatabaseExists.rows.length <= 0) {
-    console.error("'test' database does not exist. Please ensure it's created before running test");
-    process.exit(1);
-  }
-
   console.info("Checking if database needs to updated...");
 
   const migrator = new Migrator({
-    db: testDatabase,
+    db: database,
     provider: new FileMigrationProvider({
       fs,
       path,
@@ -48,7 +40,6 @@ export default async function () {
 
   if (migrateToLatestResult.results && migrateToLatestResult.results.length === 0) {
     console.log(`Database is updated to latest version`);
-    testDatabase.destroy();
   }
 
   if (migrateToLatestResult.error) {
@@ -57,4 +48,6 @@ export default async function () {
     console.error(migrateToLatestResult.error);
     process.exit(1);
   }
+
+  await database.destroy();
 }
