@@ -1,0 +1,8 @@
+node_modules
+build
+.env
+.env.*
+*.log
+__tests__
+test-helpers
+jest.config.js
