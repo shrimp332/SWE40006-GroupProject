@@ -2,7 +2,7 @@ import dotEnv from "dotenv";
 import { FileMigrationProvider, Migrator } from "kysely";
 import { promises as fs } from "fs";
 import * as path from "path";
-import { database } from "../src/config/database.config";
+import { testDatabase } from "../src/config/database.config";
 
 dotEnv.config();
 
@@ -13,7 +13,7 @@ export default async function () {
   console.info("Checking if database needs to updated...");
 
   const migrator = new Migrator({
-    db: database,
+    db: testDatabase,
     provider: new FileMigrationProvider({
       fs,
       path,
@@ -49,5 +49,5 @@ export default async function () {
     process.exit(1);
   }
 
-  await database.destroy();
+  await testDatabase.destroy();
 }

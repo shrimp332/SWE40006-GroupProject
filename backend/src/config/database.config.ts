@@ -7,7 +7,7 @@ import { DB } from "../types/kysely-types";
 
 dotEnv.config();
 
-const { DATABASE_URL, NODE_ENV } = process.env;
+const { DATABASE_URL, TEST_DATABASE_URL, NODE_ENV } = process.env;
 
 if (!DATABASE_URL) {
   console.error("STOP \n \n");
@@ -25,9 +25,20 @@ export const PG_DIALECT = new PostgresDialect({
   }),
 });
 
+export const TEST_PG_DIALECT = new PostgresDialect({
+  pool: new Pool({
+    connectionString: TEST_DATABASE_URL,
+  }),
+});
+
 export const database = new Kysely<DB>({
   dialect: PG_DIALECT,
   log: NODE_ENV === "dev" ? ["error", "query"] : ["error"],
+});
+
+export const testDatabase = new Kysely<DB>({
+  dialect: TEST_PG_DIALECT,
+  log: ["error"],
 });
 
 export async function testDatabaseConnection(): Promise<void> {
