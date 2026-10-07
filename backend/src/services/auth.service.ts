@@ -2,6 +2,15 @@ import * as argon2 from "argon2";
 import { Kysely, sql } from "kysely";
 import { createHash, randomBytes } from "node:crypto";
 
+/** Throws postgres 23505 if the email is already registered. */
+export async function register(email: string, password: string, db: Kysely<any>): Promise<void> {
+    const password_hash = await argon2.hash(password);
+
+    await db.insertInto("users")
+        .values({ email: email.toLowerCase(), password_hash })
+        .execute()
+}
+
 export async function login(email: string, password: string, db: Kysely<any>): Promise<string | null> {
     const user_id = await verifyUserPassword(email, password, db);
 

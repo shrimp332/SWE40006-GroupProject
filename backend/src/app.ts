@@ -32,7 +32,8 @@ function setupRoutes(db: Kysely<DB>) {
   router.get("/health", healthController.Get.bind(healthController));
   router.post("/health", validationMiddleware(healthSchema.post), healthController.Post.bind(healthController));
 
-  router.post("/api/login", validationMiddleware(authSchema.login), authController.Login.bind(authController));
+  router.post("/api/register", validationMiddleware(authSchema.credentials), authController.Register.bind(authController));
+  router.post("/api/login", validationMiddleware(authSchema.credentials), authController.Login.bind(authController));
   router.post("/api/logout", authController.Logout.bind(authController));
 
   return router;

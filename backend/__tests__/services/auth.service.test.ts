@@ -1,7 +1,7 @@
 import dotEnv from "dotenv";
 import * as argon2 from "argon2";
 import { createHash } from "node:crypto";
-import { getUserIdFromCookie, login, logout } from "../../src/services/auth.service";
+import { getUserIdFromCookie, login, logout, register } from "../../src/services/auth.service";
 import { testDatabase } from "../../src/config/database.config";
 import { resetTable } from "../../test-helpers/reset-table";
 
@@ -170,6 +170,37 @@ describe("logout", () => {
 
     await expect(logout("not-a-real-cookie", testDatabase)).resolves.toBeUndefined();
     await expect(countSessions()).resolves.toEqual(1);
+  });
+});
+
+describe("register", () => {
+  it("creates the user row", async () => {
+    await register("new-user@example.com", PASSWORD, testDatabase);
+
+    await expect(
+      testDatabase.selectFrom("users").select("id").where("email", "=", "new-user@example.com").executeTakeFirst(),
+    ).resolves.not.toBeUndefined();
+  });
+
+  it("password is not plaintext", async () => {
+    await register("new-user@example.com", PASSWORD, testDatabase);
+
+    const user = await testDatabase.selectFrom("users").select("password_hash").executeTakeFirstOrThrow();
+
+    expect(user.password_hash).not.toEqual(PASSWORD);
+  });
+
+  it("double register (unique)", async () => {
+    // Silences the Kysely error log for the deliberate failure below.
+    const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await register("duplicate@example.com", PASSWORD, testDatabase);
+
+      await expect(register("duplicate@example.com", PASSWORD, testDatabase)).rejects.toMatchObject({ code: "23505" });
+    } finally {
+      kyselyErrorLog.mockRestore();
+    }
   });
 });
 

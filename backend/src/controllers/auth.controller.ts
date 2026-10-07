@@ -16,6 +16,21 @@ const COOKIE_OPTIONS: CookieOptions = {
 export class AuthController {
     constructor(private db: Kysely<DB>) { }
 
+    public async Register(request: Request, response: Response) {
+        try {
+            await auth.register(request.body.email, request.body.password, this.db);
+
+            return response.status(201).send();
+        } catch (error: any) {
+            if (error?.code === "23505") { // postgres unique violation
+                return response.status(409).json({ error: "Email already registered" });
+            }
+
+            console.error(error);
+            return response.status(500).send("Internal Server Error");
+        }
+    }
+
     public async Login(request: Request, response: Response) {
         try {
             const cookie = await auth.login(request.body.email, request.body.password, this.db);
