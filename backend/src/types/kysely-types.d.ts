@@ -17,6 +17,22 @@ export interface SampleTable {
   name: string;
 }
 
+export interface Sessions {
+  created_at: Generated<Timestamp | null>;
+  expires_at: Generated<Timestamp | null>;
+  id: string;
+  user_id: number;
+}
+
+export interface Users {
+  created_at: Generated<Timestamp | null>;
+  email: string;
+  id: Generated<number>;
+  password_hash: string;
+}
+
 export interface DB {
   sample_table: SampleTable;
+  sessions: Sessions;
+  users: Users;
 }

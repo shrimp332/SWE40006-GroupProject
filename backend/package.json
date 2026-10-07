@@ -19,6 +19,7 @@
     "@aws-sdk/lib-storage": "^3.962.0",
     "@types/cors": "^2.8.17",
     "@types/pg": "^8.11.11",
+    "argon2": "^0.45.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.1",
