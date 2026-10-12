@@ -8,7 +8,7 @@ import { resetTable } from "../../test-helpers/reset-table";
 dotEnv.config();
 
 const EMAIL = "test-user@example.com";
-const PASSWORD = "correct-horse-battery-staple";
+const PASSWORD = "password";
 
 let passwordHash: string;
 

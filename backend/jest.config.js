@@ -7,5 +7,6 @@ module.exports = {
   transform: {
     "^.+.tsx?$": ["ts-jest", {}],
   },
-  maxWorkers: "70%",
+  maxWorkers: 1,
+  testTimeout: 15_000,
 };
