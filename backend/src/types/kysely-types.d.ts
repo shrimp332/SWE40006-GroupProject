@@ -11,6 +11,24 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface Clicks {
+  clicked_at: Generated<Timestamp>;
+  id: Generated<number>;
+  link_id: number;
+  referrer: string | null;
+  user_agent: string | null;
+}
+
+export interface Links {
+  code: string;
+  created_at: Generated<Timestamp>;
+  disabled: Generated<boolean>;
+  expires_at: Timestamp | null;
+  id: Generated<number>;
+  owner_id: number;
+  target_url: string;
+}
+
 export interface SampleTable {
   created_at: Generated<Timestamp | null>;
   id: Generated<number>;
@@ -32,6 +50,8 @@ export interface Users {
 }
 
 export interface DB {
+  clicks: Clicks;
+  links: Links;
   sample_table: SampleTable;
   sessions: Sessions;
   users: Users;
