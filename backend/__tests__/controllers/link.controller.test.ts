@@ -456,3 +456,164 @@ describe("GET /api/links", () => {
     }
   });
 });
+
+function patchLink(code: string, body: object, withCookie: string | null = cookie) {
+  const request = superRequestAgent.patch(`/api/links/${code}`);
+
+  return (withCookie ? request.set("Cookie", withCookie) : request).send(body);
+}
+
+function storedLink(code: string) {
+  return testDatabase.selectFrom("links").selectAll().where("code", "=", code).executeTakeFirstOrThrow();
+}
+
+describe("PATCH /api/links/:code", () => {
+  it("responds 200 with the disabled link and its short link stops redirecting", async () => {
+    const code = await createdCode();
+
+    const response = await patchLink(code, { disabled: true });
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body).toMatchObject({ code, target_url: TARGET_URL, disabled: true });
+    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(404);
+  });
+
+  it("enables the link again and its short link redirects again", async () => {
+    const code = await createdCode();
+    await patchLink(code, { disabled: true });
+
+    const response = await patchLink(code, { disabled: false });
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body.disabled).toEqual(false);
+
+    const redirect = await superRequestAgent.get(`/${code}`);
+
+    expect(redirect.statusCode).toEqual(302);
+    expect(redirect.headers.location).toEqual(TARGET_URL);
+  });
+
+  it("is harmless to repeat", async () => {
+    const code = await createdCode();
+
+    await patchLink(code, { disabled: true });
+    const again = await patchLink(code, { disabled: true });
+
+    expect(again.statusCode).toEqual(200);
+    expect(again.body.disabled).toEqual(true);
+  });
+
+  it("returns the same fields as when the link was created", async () => {
+    const created = await createLink({ url: TARGET_URL });
+
+    const response = await patchLink(created.body.code, { disabled: false });
+
+    expect(response.body).toEqual(created.body);
+    expect(Object.keys(response.body).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("changes only the disabled flag and only on that link", async () => {
+    const target = await createdCode("https://example.com/target");
+    const other = await createdCode("https://example.com/other");
+    const before = await storedLink(target);
+
+    await patchLink(target, { disabled: true });
+
+    expect(await storedLink(target)).toEqual({ ...before, disabled: true });
+    expect((await storedLink(other)).disabled).toEqual(false);
+    expect((await superRequestAgent.get(`/${other}`)).statusCode).toEqual(302);
+  });
+
+  it("shows up as disabled in the list", async () => {
+    const code = await createdCode();
+
+    await patchLink(code, { disabled: true });
+
+    const list = await listLinks();
+
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0]).toMatchObject({ code, disabled: true });
+  });
+
+  it("does not record a click", async () => {
+    const code = await createdCode();
+
+    await patchLink(code, { disabled: true });
+    await patchLink(code, { disabled: false });
+
+    await expect(countClicks()).resolves.toEqual(0);
+  });
+
+  it("responds 404 for a code that does not exist", async () => {
+    const response = await patchLink("Nope123", { disabled: true });
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" });
+  });
+
+  it("responds 404 and changes nothing for another user's link", async () => {
+    const otherCookie = await signUp("other@example.com");
+    const code = (await createLink({ url: TARGET_URL }, otherCookie)).body.code;
+
+    const response = await patchLink(code, { disabled: true });
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" }); // same answer as a missing code, so codes can't be probed
+    expect((await storedLink(code)).disabled).toEqual(false);
+    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+  });
+
+  it.each([
+    ["disabled is missing", {}],
+    ["disabled is a string", { disabled: "true" }],
+    ["disabled is a number", { disabled: 1 }],
+    ["disabled is null", { disabled: null }],
+    ["body tries to change the destination", { disabled: true, target_url: "https://evil.example" }],
+    ["body tries to change the code", { disabled: true, code: "custom1" }],
+    ["body only has other fields", { target_url: "https://evil.example" }],
+  ])("responds 400 and changes nothing when %s", async (_name, body) => {
+    const code = await createdCode();
+    const before = await storedLink(code);
+
+    const response = await patchLink(code, body);
+
+    expect(response.statusCode).toEqual(400);
+    expect(response.body.error).toEqual("Invalid data");
+    expect(await storedLink(code)).toEqual(before);
+  });
+
+  it("redirects to /login without a session cookie and changes nothing", async () => {
+    const code = await createdCode();
+
+    const response = await patchLink(code, { disabled: true }, null);
+
+    expect(response.statusCode).toEqual(302);
+    expect(response.headers.location).toEqual("/login");
+    expect((await storedLink(code)).disabled).toEqual(false);
+  });
+
+  it("redirects to /login for a cookie that matches no session and changes nothing", async () => {
+    const code = await createdCode();
+
+    const response = await patchLink(code, { disabled: true }, `${SESSION_COOKIE}=not-a-real-cookie`);
+
+    expect(response.statusCode).toEqual(302);
+    expect((await storedLink(code)).disabled).toEqual(false);
+  });
+
+  it("responds 500 when saving fails", async () => {
+    const code = await createdCode();
+    const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+    const setSpy = jest.spyOn(linkService, "setDisabled").mockRejectedValue(new Error("database down"));
+
+    try {
+      const response = await patchLink(code, { disabled: true });
+
+      expect(response.statusCode).toEqual(500);
+      expect(setSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setSpy.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+});

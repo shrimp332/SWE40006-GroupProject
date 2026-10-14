@@ -48,6 +48,18 @@ export async function listLinks(ownerId: number, db: Kysely<any>): Promise<Link[
         .execute();
 }
 
+/** Returns null when the code does not exist or belongs to another user. */
+export async function setDisabled(ownerId: number, code: string, disabled: boolean, db: Kysely<any>): Promise<Link | null> {
+    const link = await db.updateTable("links")
+        .set({ disabled })
+        .where("code", "=", code)
+        .where("owner_id", "=", ownerId)
+        .returning(["code", "target_url", "created_at", "expires_at", "disabled"])
+        .executeTakeFirst();
+
+    return link ?? null;
+}
+
 /** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
 export async function resolveCode(code: string, db: Kysely<any>): Promise<{ id: number; target_url: string } | null> {
     const link = await db.selectFrom("links")

@@ -28,6 +28,21 @@ export class LinkController {
         }
     }
 
+    /** Requires authMiddleware. Turns the logged-in user's link off or on. */
+    public async Update(request: Request, response: Response) {
+        try {
+            const link = await links.setDisabled(response.locals.userId, String(request.params.code), request.body.disabled, this.db);
+
+            // Same answer for "no such code" and "someone else's code", so codes can't be probed.
+            if (!link) return response.status(404).json({ error: "Link not found" });
+
+            return response.status(200).json(link);
+        } catch (error) {
+            console.error(error);
+            return response.status(500).send("Internal Server Error");
+        }
+    }
+
     /** Public: anyone with the short link is redirected, and the click is recorded for the owner. */
     public async Redirect(request: Request, response: Response) {
         try {

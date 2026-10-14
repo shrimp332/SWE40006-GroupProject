@@ -1,7 +1,17 @@
 import dotEnv from "dotenv";
 import crypto = require("node:crypto"); // the real module object, a `* as` import wraps it in read-only getters that jest.spyOn can't replace
 import { sql } from "kysely";
-import { CODE_LENGTH, CODE_PATTERN, MAX_CODE_ATTEMPTS, createLink, generateCode, listLinks, recordClick, resolveCode } from "../../src/services/link.service";
+import {
+  CODE_LENGTH,
+  CODE_PATTERN,
+  MAX_CODE_ATTEMPTS,
+  createLink,
+  generateCode,
+  listLinks,
+  recordClick,
+  resolveCode,
+  setDisabled,
+} from "../../src/services/link.service";
 import { testDatabase } from "../../src/config/database.config";
 import { resetTable } from "../../test-helpers/reset-table";
 
@@ -332,5 +342,91 @@ describe("listLinks", () => {
     const links = await listLinks(ownerId, testDatabase);
 
     expect(links.map((link) => link.code)).toEqual(created.map((link) => link.code).reverse());
+  });
+});
+
+describe("setDisabled", () => {
+  async function insertOtherUser(): Promise<number> {
+    const user = await testDatabase
+      .insertInto("users")
+      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    return user.id;
+  }
+
+  function storedLink(code: string) {
+    return testDatabase.selectFrom("links").selectAll().where("code", "=", code).executeTakeFirstOrThrow();
+  }
+
+  it("disables a link and returns it", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    const link = await setDisabled(ownerId, code, true, testDatabase);
+
+    expect(link).toMatchObject({ code, target_url: TARGET_URL, disabled: true });
+    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
+  });
+
+  it("enables a disabled link again", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await setDisabled(ownerId, code, true, testDatabase);
+
+    const link = await setDisabled(ownerId, code, false, testDatabase);
+
+    expect(link).toMatchObject({ code, disabled: false });
+    await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
+  });
+
+  it("is harmless to repeat", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await setDisabled(ownerId, code, true, testDatabase);
+
+    await expect(setDisabled(ownerId, code, true, testDatabase)).resolves.toMatchObject({ disabled: true });
+  });
+
+  it("returns the same fields as createLink and nothing else", async () => {
+    const created = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    const link = await setDisabled(ownerId, created.code, false, testDatabase);
+
+    expect(link).toEqual(created);
+    expect(Object.keys(link!).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("changes only the disabled flag", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    const before = await storedLink(code);
+
+    await setDisabled(ownerId, code, true, testDatabase);
+
+    const after = await storedLink(code);
+
+    expect(after).toEqual({ ...before, disabled: true });
+  });
+
+  it("leaves the owner's other links alone", async () => {
+    const target = await createLink(ownerId, "https://example.com/target", testDatabase);
+    const other = await createLink(ownerId, "https://example.com/other", testDatabase);
+
+    await setDisabled(ownerId, target.code, true, testDatabase);
+
+    expect((await storedLink(other.code)).disabled).toEqual(false);
+  });
+
+  it("returns null for a code that does not exist", async () => {
+    await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await expect(setDisabled(ownerId, "Nope123", true, testDatabase)).resolves.toBeNull();
+  });
+
+  it("returns null and changes nothing for another user's link", async () => {
+    const otherId = await insertOtherUser();
+    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
+
+    await expect(setDisabled(ownerId, code, true, testDatabase)).resolves.toBeNull();
+    expect((await storedLink(code)).disabled).toEqual(false);
   });
 });

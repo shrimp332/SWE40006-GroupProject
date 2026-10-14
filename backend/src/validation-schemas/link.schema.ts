@@ -7,6 +7,14 @@ const create = z
   })
   .strict();
 
+// Disabling is the only change a link accepts: the destination and the code are never edited through this route.
+const update = z
+  .object({
+    disabled: z.boolean(),
+  })
+  .strict();
+
 export const linkSchema = {
   create,
+  update,
 };
