@@ -41,6 +41,7 @@ function setupRoutes(db: Kysely<DB>) {
   router.post("/api/logout", authController.Logout.bind(authController));
 
   router.post("/api/links", authMiddleware(db), validationMiddleware(linkSchema.create), linkController.Create.bind(linkController));
+  router.get("/api/links", authMiddleware(db), linkController.List.bind(linkController));
 
   router.get("/:code", linkController.Redirect.bind(linkController));
 

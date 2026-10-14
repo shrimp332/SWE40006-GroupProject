@@ -337,3 +337,122 @@ describe("GET /:code", () => {
     expect(health.text).toEqual("HEALTHY");
   });
 });
+
+function listLinks(withCookie: string | null = cookie) {
+  const request = superRequestAgent.get("/api/links");
+
+  return withCookie ? request.set("Cookie", withCookie) : request;
+}
+
+describe("GET /api/links", () => {
+  it("responds 200 with the caller's links, newest first", async () => {
+    const first = await createdCode("https://example.com/first");
+    const second = await createdCode("https://example.com/second");
+
+    const response = await listLinks();
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body.map((link: { code: string }) => link.code)).toEqual([second, first]);
+  });
+
+  it("returns each link with the same fields as when it was created", async () => {
+    const created = await createLink({ url: TARGET_URL });
+
+    const response = await listLinks();
+
+    expect(response.body).toEqual([created.body]);
+    expect(Object.keys(response.body[0]).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("does not list another user's links", async () => {
+    const otherCookie = await signUp("other@example.com");
+    await createLink({ url: "https://example.com/not-mine" }, otherCookie);
+    const mine = await createdCode("https://example.com/mine");
+
+    const response = await listLinks();
+
+    expect(response.body.map((link: { code: string }) => link.code)).toEqual([mine]);
+    expect(JSON.stringify(response.body)).not.toContain("not-mine");
+  });
+
+  it("each user sees only their own links when both have some", async () => {
+    const otherCookie = await signUp("other@example.com");
+    const mine = await createdCode("https://example.com/mine");
+    const theirs = (await createLink({ url: "https://example.com/theirs" }, otherCookie)).body.code;
+
+    const myList = await listLinks();
+    const theirList = await listLinks(otherCookie);
+
+    expect(myList.body.map((link: { code: string }) => link.code)).toEqual([mine]);
+    expect(theirList.body.map((link: { code: string }) => link.code)).toEqual([theirs]);
+  });
+
+  it("responds 200 with an empty list when the user has no links", async () => {
+    const response = await listLinks();
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it("includes disabled and expired links", async () => {
+    const disabled = await createdCode("https://example.com/disabled");
+    const expired = await createdCode("https://example.com/expired");
+    await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled).execute();
+    // Written by the database's own clock: expires_at is a plain timestamp, a Node Date could be hours off.
+    await testDatabase.updateTable("links").set({ expires_at: sql<Date>`NOW() - INTERVAL '1 minute'` }).where("code", "=", expired).execute();
+
+    const response = await listLinks();
+
+    expect(response.body).toHaveLength(2);
+    expect(response.body.find((link: { code: string }) => link.code === disabled).disabled).toEqual(true);
+    expect(response.body.find((link: { code: string }) => link.code === expired).expires_at).not.toBeNull();
+  });
+
+  it("does not record a click or change anything", async () => {
+    await createdCode();
+
+    await listLinks();
+    await listLinks();
+
+    await expect(countClicks()).resolves.toEqual(0);
+    await expect(testDatabase.selectFrom("links").selectAll().execute()).resolves.toHaveLength(1);
+  });
+
+  it("redirects to /login without a session cookie", async () => {
+    await createdCode();
+
+    const response = await listLinks(null);
+
+    expect(response.statusCode).toEqual(302);
+    expect(response.headers.location).toEqual("/login");
+  });
+
+  it("redirects to /login for a cookie that matches no session", async () => {
+    const response = await listLinks(`${SESSION_COOKIE}=not-a-real-cookie`);
+
+    expect(response.statusCode).toEqual(302);
+    expect(response.headers.location).toEqual("/login");
+  });
+
+  it("is not caught by the public redirect route", async () => {
+    const response = await listLinks();
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.headers.location).toBeUndefined();
+  });
+
+  it("responds 500 when listing fails", async () => {
+    const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+    const listSpy = jest.spyOn(linkService, "listLinks").mockRejectedValue(new Error("database down"));
+
+    try {
+      const response = await listLinks();
+
+      expect(response.statusCode).toEqual(500);
+      expect(listSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      listSpy.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+});

@@ -18,6 +18,16 @@ export class LinkController {
         }
     }
 
+    /** Requires authMiddleware. Lists only the logged-in user's links. */
+    public async List(request: Request, response: Response) {
+        try {
+            return response.status(200).json(await links.listLinks(response.locals.userId, this.db));
+        } catch (error) {
+            console.error(error);
+            return response.status(500).send("Internal Server Error");
+        }
+    }
+
     /** Public: anyone with the short link is redirected, and the click is recorded for the owner. */
     public async Redirect(request: Request, response: Response) {
         try {

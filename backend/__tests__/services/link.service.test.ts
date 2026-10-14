@@ -1,7 +1,7 @@
 import dotEnv from "dotenv";
 import crypto = require("node:crypto"); // the real module object, a `* as` import wraps it in read-only getters that jest.spyOn can't replace
 import { sql } from "kysely";
-import { CODE_LENGTH, CODE_PATTERN, MAX_CODE_ATTEMPTS, createLink, generateCode, recordClick, resolveCode } from "../../src/services/link.service";
+import { CODE_LENGTH, CODE_PATTERN, MAX_CODE_ATTEMPTS, createLink, generateCode, listLinks, recordClick, resolveCode } from "../../src/services/link.service";
 import { testDatabase } from "../../src/config/database.config";
 import { resetTable } from "../../test-helpers/reset-table";
 
@@ -270,5 +270,67 @@ describe("recordClick", () => {
     } finally {
       kyselyErrorLog.mockRestore();
     }
+  });
+});
+
+describe("listLinks", () => {
+  async function insertOtherUser(): Promise<number> {
+    const user = await testDatabase
+      .insertInto("users")
+      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    return user.id;
+  }
+
+  it("returns only the owner's links, newest first", async () => {
+    const otherId = await insertOtherUser();
+    const older = await createLink(ownerId, "https://example.com/older", testDatabase);
+    const newer = await createLink(ownerId, "https://example.com/newer", testDatabase);
+    await createLink(otherId, "https://example.com/not-mine", testDatabase);
+
+    const links = await listLinks(ownerId, testDatabase);
+
+    expect(links.map((link) => link.code)).toEqual([newer.code, older.code]);
+  });
+
+  it("returns the same fields as createLink and nothing else", async () => {
+    const created = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    const [listed] = await listLinks(ownerId, testDatabase);
+
+    expect(listed).toEqual(created);
+    expect(Object.keys(listed).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("returns an empty list when the user has no links", async () => {
+    const otherId = await insertOtherUser();
+    await createLink(otherId, TARGET_URL, testDatabase);
+
+    await expect(listLinks(ownerId, testDatabase)).resolves.toEqual([]);
+  });
+
+  it("includes disabled and expired links so the owner can manage them", async () => {
+    const disabled = await createLink(ownerId, "https://example.com/disabled", testDatabase);
+    const expired = await createLink(ownerId, "https://example.com/expired", testDatabase);
+    await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled.code).execute();
+    await testDatabase.updateTable("links").set({ expires_at: sql<Date>`NOW() - INTERVAL '1 minute'` }).where("code", "=", expired.code).execute();
+
+    const links = await listLinks(ownerId, testDatabase);
+
+    expect(links).toHaveLength(2);
+    expect(links.find((link) => link.code === disabled.code)).toMatchObject({ disabled: true });
+    expect(links.find((link) => link.code === expired.code)?.expires_at).toBeInstanceOf(Date);
+  });
+
+  it("keeps a stable newest-first order for links created in quick succession", async () => {
+    const created = [];
+
+    for (let i = 0; i < 5; i++) created.push(await createLink(ownerId, `https://example.com/${i}`, testDatabase));
+
+    const links = await listLinks(ownerId, testDatabase);
+
+    expect(links.map((link) => link.code)).toEqual(created.map((link) => link.code).reverse());
   });
 });

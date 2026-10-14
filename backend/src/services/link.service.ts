@@ -38,6 +38,16 @@ export async function createLink(ownerId: number, targetUrl: string, db: Kysely<
     }
 }
 
+/** All of the owner's links, newest first, including disabled and expired ones so the owner can manage them. */
+export async function listLinks(ownerId: number, db: Kysely<any>): Promise<Link[]> {
+    return db.selectFrom("links")
+        .select(["code", "target_url", "created_at", "expires_at", "disabled"])
+        .where("owner_id", "=", ownerId)
+        .orderBy("created_at", "desc")
+        .orderBy("id", "desc") // links created in the same instant keep a stable order
+        .execute();
+}
+
 /** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
 export async function resolveCode(code: string, db: Kysely<any>): Promise<{ id: number; target_url: string } | null> {
     const link = await db.selectFrom("links")
