@@ -1,6 +1,7 @@
 import dotEnv from "dotenv";
 import crypto = require("node:crypto"); // the real module object, a `* as` import wraps it in read-only getters that jest.spyOn can't replace
-import { CODE_LENGTH, CODE_PATTERN, MAX_CODE_ATTEMPTS, createLink, generateCode } from "../../src/services/link.service";
+import { sql } from "kysely";
+import { CODE_LENGTH, CODE_PATTERN, MAX_CODE_ATTEMPTS, createLink, generateCode, recordClick, resolveCode } from "../../src/services/link.service";
 import { testDatabase } from "../../src/config/database.config";
 import { resetTable } from "../../test-helpers/reset-table";
 
@@ -147,5 +148,127 @@ describe("createLink", () => {
         kyselyErrorLog.mockRestore();
       }
     });
+  });
+});
+
+function setExpiry(offset: "-1 minute" | "+1 minute") {
+  return testDatabase
+    .updateTable("links")
+    .set({ expires_at: sql<Date>`NOW() + ${offset}::interval` })
+    .execute();
+}
+
+function countClicks(): Promise<number> {
+  return testDatabase
+    .selectFrom("clicks")
+    .select((eb) => eb.fn.countAll<string>().as("count"))
+    .executeTakeFirstOrThrow()
+    .then((row) => Number(row.count));
+}
+
+describe("resolveCode", () => {
+  it("returns the id and destination of a live link", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await expect(resolveCode(code, testDatabase)).resolves.toEqual({ id: expect.any(Number), target_url: TARGET_URL });
+  });
+
+  it("returns null for a code that does not exist", async () => {
+    await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await expect(resolveCode("Nope123", testDatabase)).resolves.toBeNull();
+  });
+
+  it("returns null for a disabled link and the link again once it is enabled", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await testDatabase.updateTable("links").set({ disabled: true }).execute();
+    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
+
+    await testDatabase.updateTable("links").set({ disabled: false }).execute();
+    await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
+  });
+
+  it("returns null for an expired link", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await setExpiry("-1 minute");
+
+    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
+  });
+
+  it("returns the link while its expiry is still in the future", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await setExpiry("+1 minute");
+
+    await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
+  });
+
+  it("matches the code case-sensitively", async () => {
+    await testDatabase.insertInto("links").values({ code: "AbCdEfG", target_url: TARGET_URL, owner_id: ownerId }).execute();
+
+    await expect(resolveCode("AbCdEfG", testDatabase)).resolves.not.toBeNull();
+    await expect(resolveCode("abcdefg", testDatabase)).resolves.toBeNull();
+    await expect(resolveCode("ABCDEFG", testDatabase)).resolves.toBeNull();
+  });
+
+  it("finds the right link when several exist", async () => {
+    const first = await createLink(ownerId, "https://example.com/first", testDatabase);
+    const second = await createLink(ownerId, "https://example.com/second", testDatabase);
+
+    await expect(resolveCode(first.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/first" });
+    await expect(resolveCode(second.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/second" });
+  });
+});
+
+describe("recordClick", () => {
+  async function linkId(): Promise<number> {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    return (await resolveCode(code, testDatabase))!.id;
+  }
+
+  it("stores the referrer and user agent against the link", async () => {
+    const id = await linkId();
+
+    await recordClick(id, "https://social.example/post", "Mozilla/5.0 (test)", testDatabase);
+
+    const click = await testDatabase.selectFrom("clicks").selectAll().executeTakeFirstOrThrow();
+
+    expect(click.link_id).toEqual(id);
+    expect(click.referrer).toEqual("https://social.example/post");
+    expect(click.user_agent).toEqual("Mozilla/5.0 (test)");
+    expect(click.clicked_at).toBeInstanceOf(Date);
+  });
+
+  it("stores null when the headers are missing", async () => {
+    const id = await linkId();
+
+    await recordClick(id, undefined, undefined, testDatabase);
+
+    const click = await testDatabase.selectFrom("clicks").selectAll().executeTakeFirstOrThrow();
+
+    expect(click.referrer).toBeNull();
+    expect(click.user_agent).toBeNull();
+  });
+
+  it("adds a row for every call", async () => {
+    const id = await linkId();
+
+    await recordClick(id, undefined, undefined, testDatabase);
+    await recordClick(id, undefined, undefined, testDatabase);
+
+    await expect(countClicks()).resolves.toEqual(2);
+  });
+
+  it("rejects a link that does not exist and stores nothing", async () => {
+    // Silences the Kysely error log for the deliberate failure below.
+    const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(recordClick(999_999, undefined, undefined, testDatabase)).rejects.toMatchObject({ code: "23503" }); // postgres foreign key violation
+      await expect(countClicks()).resolves.toEqual(0);
+    } finally {
+      kyselyErrorLog.mockRestore();
+    }
   });
 });

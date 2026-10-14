@@ -42,6 +42,8 @@ function setupRoutes(db: Kysely<DB>) {
 
   router.post("/api/links", authMiddleware(db), validationMiddleware(linkSchema.create), linkController.Create.bind(linkController));
 
+  router.get("/:code", linkController.Redirect.bind(linkController));
+
   return router;
 }
 

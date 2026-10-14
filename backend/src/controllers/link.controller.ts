@@ -17,4 +17,31 @@ export class LinkController {
             return response.status(500).send("Internal Server Error");
         }
     }
+
+    /** Public: anyone with the short link is redirected, and the click is recorded for the owner. */
+    public async Redirect(request: Request, response: Response) {
+        try {
+            const code = String(request.params.code);
+
+            // Anything that could not be one of our codes never touches the database
+            if (!links.CODE_PATTERN.test(code)) return response.status(404).send("Not Found");
+
+            const link = await links.resolveCode(code, this.db);
+
+            if (!link) return response.status(404).send("Not Found");
+
+            try {
+                await links.recordClick(link.id, request.get("referer"), request.get("user-agent"), this.db);
+            } catch (error) {
+                // A failed analytics write must not stop the visitor reaching their destination
+                console.error(error);
+            }
+
+            // 302, not 301: browsers cache a 301, so a later disable or delete would not reach people who already clicked
+            return response.redirect(302, link.target_url);
+        } catch (error) {
+            console.error(error);
+            return response.status(500).send("Internal Server Error");
+        }
+    }
 }

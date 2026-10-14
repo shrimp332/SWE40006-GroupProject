@@ -1,4 +1,4 @@
-import { Kysely } from "kysely";
+import { Kysely, sql } from "kysely";
 import { randomInt } from "node:crypto";
 
 export const CODE_LENGTH = 7;
@@ -36,4 +36,22 @@ export async function createLink(ownerId: number, targetUrl: string, db: Kysely<
             if (error?.code !== "23505" || attempt >= MAX_CODE_ATTEMPTS) throw error;
         }
     }
+}
+
+/** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
+export async function resolveCode(code: string, db: Kysely<any>): Promise<{ id: number; target_url: string } | null> {
+    const link = await db.selectFrom("links")
+        .select(["id", "target_url"])
+        .where("code", "=", code)
+        .where("disabled", "=", false)
+        .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", sql<Date>`NOW()`)]))
+        .executeTakeFirst();
+
+    return link ?? null;
+}
+
+export async function recordClick(linkId: number, referrer: string | undefined, userAgent: string | undefined, db: Kysely<any>): Promise<void> {
+    await db.insertInto("clicks")
+        .values({ link_id: linkId, referrer: referrer ?? null, user_agent: userAgent ?? null })
+        .execute();
 }
