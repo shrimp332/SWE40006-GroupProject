@@ -5,10 +5,13 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { AuthController } from "./controllers/auth.controller";
 import { HealthController } from "./controllers/health.controller";
+import { LinkController } from "./controllers/link.controller";
 import { rateLimitOptions } from "./config/rate-limit.config";
 import { corsOptions } from "./config/cors.config";
+import { authMiddleware } from "./middlewares/auth.middleware";
 import { validationMiddleware } from "./middlewares/validation.middleware";
 import { authSchema } from "./validation-schemas/auth.schema";
+import { linkSchema } from "./validation-schemas/link.schema";
 import { healthSchema } from "./validation-schemas/health.schema.ts/health.schema";
 import { Kysely } from "kysely";
 import { DB } from "./types/kysely-types";
@@ -27,6 +30,7 @@ function setupRoutes(db: Kysely<DB>) {
   const router = Router();
   const healthController = new HealthController(db);
   const authController = new AuthController(db);
+  const linkController = new LinkController(db);
 
   // Note: Express stores a reference to the controller function but it loses the reference to the controller instance.
   router.get("/health", healthController.Get.bind(healthController));
@@ -35,6 +39,8 @@ function setupRoutes(db: Kysely<DB>) {
   router.post("/api/register", validationMiddleware(authSchema.credentials), authController.Register.bind(authController));
   router.post("/api/login", validationMiddleware(authSchema.credentials), authController.Login.bind(authController));
   router.post("/api/logout", authController.Logout.bind(authController));
+
+  router.post("/api/links", authMiddleware(db), validationMiddleware(linkSchema.create), linkController.Create.bind(linkController));
 
   return router;
 }
