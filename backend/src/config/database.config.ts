@@ -1,11 +1,16 @@
 import * as dotEnv from "dotenv";
 import { FileMigrationProvider, Kysely, Migrator, PostgresDialect, sql } from "kysely";
-import { Pool } from "pg";
+import { Pool, defaults, types } from "pg";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { DB } from "../types/kysely-types";
 
 dotEnv.config();
+
+// links.expires_at and clicks.clicked_at are plain `timestamp` columns, which carry no time zone. 
+// The database writesthem in UTC (its NOW()). These two settings make reading and writing both mean UTC.
+types.setTypeParser(types.builtins.TIMESTAMP, (value: string) => new Date(`${value.replace(" ", "T")}Z`));
+defaults.parseInputDatesAsUTC = true;
 
 const { DATABASE_URL, TEST_DATABASE_URL, NODE_ENV } = process.env;
 
