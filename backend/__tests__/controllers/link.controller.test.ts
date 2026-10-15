@@ -796,3 +796,157 @@ describe("POST /api/links/:code/regenerate", () => {
     }
   });
 });
+
+function deleteLink(code: string, withCookie: string | null = cookie) {
+  const request = superRequestAgent.delete(`/api/links/${code}`);
+
+  return withCookie ? request.set("Cookie", withCookie) : request;
+}
+
+describe("DELETE /api/links/:code", () => {
+  it("responds 204 with no body and removes the link", async () => {
+    const code = await createdCode();
+
+    const response = await deleteLink(code);
+
+    expect(response.statusCode).toEqual(204);
+    expect(response.text).toEqual("");
+    await expect(storedCodes()).resolves.toEqual([]);
+  });
+
+  it("stops the short link", async () => {
+    const code = await createdCode();
+
+    await deleteLink(code);
+
+    const response = await superRequestAgent.get(`/${code}`);
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.headers.location).toBeUndefined();
+  });
+
+  it("removes the link from the list", async () => {
+    const doomed = await createdCode("https://example.com/doomed");
+    const kept = await createdCode("https://example.com/kept");
+
+    await deleteLink(doomed);
+
+    const list = await listLinks();
+
+    expect(list.body.map((link: { code: string }) => link.code)).toEqual([kept]);
+  });
+
+  it("deletes the link's clicks with it", async () => {
+    const code = await createdCode();
+    await superRequestAgent.get(`/${code}`);
+    await superRequestAgent.get(`/${code}`);
+
+    await deleteLink(code);
+
+    await expect(countClicks()).resolves.toEqual(0);
+  });
+
+  it("leaves the owner's other links and their clicks alone", async () => {
+    const doomed = await createdCode("https://example.com/doomed");
+    const kept = await createdCode("https://example.com/kept");
+    await superRequestAgent.get(`/${doomed}`);
+    await superRequestAgent.get(`/${kept}`);
+
+    await deleteLink(doomed);
+
+    expect((await superRequestAgent.get(`/${kept}`)).headers.location).toEqual("https://example.com/kept");
+    await expect(countClicks()).resolves.toEqual(2); // the kept link's first click plus the one just made
+  });
+
+  it("deletes a disabled link too", async () => {
+    const code = await createdCode();
+    await patchLink(code, { disabled: true });
+
+    expect((await deleteLink(code)).statusCode).toEqual(204);
+    await expect(storedCodes()).resolves.toEqual([]);
+  });
+
+  it("leaves nothing to manage afterwards", async () => {
+    const code = await createdCode();
+
+    await deleteLink(code);
+
+    expect((await patchLink(code, { disabled: true })).statusCode).toEqual(404);
+    expect((await regenerateLink(code).send({})).statusCode).toEqual(404);
+  });
+
+  it("responds 404 the second time", async () => {
+    const code = await createdCode();
+
+    await deleteLink(code);
+    const again = await deleteLink(code);
+
+    expect(again.statusCode).toEqual(404);
+    expect(again.body).toEqual({ error: "Link not found" });
+  });
+
+  it("responds 404 for a code that does not exist", async () => {
+    const response = await deleteLink("Nope123");
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" });
+  });
+
+  it("responds 404 and deletes nothing for another user's link", async () => {
+    const otherCookie = await signUp("other@example.com");
+    const code = (await createLink({ url: TARGET_URL }, otherCookie)).body.code;
+
+    const response = await deleteLink(code);
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
+    await expect(storedCodes()).resolves.toEqual([code]);
+    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+  });
+
+  it("lets each user delete only their own links", async () => {
+    const otherCookie = await signUp("other@example.com");
+    const mine = await createdCode("https://example.com/mine");
+    const theirs = (await createLink({ url: "https://example.com/theirs" }, otherCookie)).body.code;
+
+    await deleteLink(mine);
+    await deleteLink(theirs, otherCookie);
+
+    await expect(storedCodes()).resolves.toEqual([]);
+  });
+
+  it("redirects to /login without a session cookie and deletes nothing", async () => {
+    const code = await createdCode();
+
+    const response = await deleteLink(code, null);
+
+    expect(response.statusCode).toEqual(302);
+    expect(response.headers.location).toEqual("/login");
+    await expect(storedCodes()).resolves.toEqual([code]);
+  });
+
+  it("redirects to /login for a cookie that matches no session and deletes nothing", async () => {
+    const code = await createdCode();
+
+    const response = await deleteLink(code, `${SESSION_COOKIE}=not-a-real-cookie`);
+
+    expect(response.statusCode).toEqual(302);
+    await expect(storedCodes()).resolves.toEqual([code]);
+  });
+
+  it("responds 500 when deleting fails", async () => {
+    const code = await createdCode();
+    const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+    const deleteSpy = jest.spyOn(linkService, "deleteLink").mockRejectedValue(new Error("database down"));
+
+    try {
+      const response = await deleteLink(code);
+
+      expect(response.statusCode).toEqual(500);
+      expect(deleteSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      deleteSpy.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+});

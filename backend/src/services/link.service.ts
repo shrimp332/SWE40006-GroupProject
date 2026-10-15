@@ -89,6 +89,16 @@ export async function regenerateCode(ownerId: number, code: string, db: Kysely<a
     }
 }
 
+/** Deletes the link and its clicks. Returns false if the code does not exist or belongs to another user. */
+export async function deleteLink(ownerId: number, code: string, db: Kysely<any>): Promise<boolean> {
+    const result = await db.deleteFrom("links")
+        .where("code", "=", code)
+        .where("owner_id", "=", ownerId)
+        .executeTakeFirst();
+
+    return Number(result.numDeletedRows) > 0;
+}
+
 /** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
 export async function resolveCode(code: string, db: Kysely<any>): Promise<{ id: number; target_url: string } | null> {
     const link = await db.selectFrom("links")

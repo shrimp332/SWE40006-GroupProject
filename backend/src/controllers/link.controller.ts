@@ -58,6 +58,21 @@ export class LinkController {
         }
     }
 
+    /** Needs authMiddleware. Deletes the user's own link, its short link stops working. */
+    public async Delete(request: Request, response: Response) {
+        try {
+            const deleted = await links.deleteLink(response.locals.userId, String(request.params.code), this.db);
+
+            // Same 404 whether the code is missing or not yours
+            if (!deleted) return response.status(404).json({ error: "Link not found" });
+
+            return response.status(204).send();
+        } catch (error) {
+            console.error(error);
+            return response.status(500).send("Internal Server Error");
+        }
+    }
+
     /** Public. Redirects and records the click. */
     public async Redirect(request: Request, response: Response) {
         try {
