@@ -1,5 +1,4 @@
 import dotEnv from "dotenv";
-import { sql } from "kysely";
 import { superRequestAgent } from "../../test-helpers/after-global-setup";
 import { resetTable } from "../../test-helpers/reset-table";
 import { testDatabase } from "../../src/config/database.config";
@@ -25,7 +24,7 @@ afterEach(async () => {
   await resetTable("users");
 });
 
-/** Registers and logs in through the real endpoints, returns the Cookie header value. */
+/** Registers and logs in, returns the Cookie header value. */
 async function signUp(email: string): Promise<string> {
   await superRequestAgent.post("/api/register").send({ email, password: PASSWORD });
   const response = await superRequestAgent.post("/api/login").send({ email, password: PASSWORD });
@@ -270,8 +269,7 @@ describe("GET /:code", () => {
 
   it("responds 404 and records nothing for an expired link", async () => {
     const code = await createdCode();
-    // Written by the database's own clock: expires_at is a plain timestamp, a Node Date could be hours off.
-    await testDatabase.updateTable("links").set({ expires_at: sql<Date>`NOW() - INTERVAL '1 minute'` }).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).execute();
 
     const response = await superRequestAgent.get(`/${code}`);
 
@@ -398,8 +396,7 @@ describe("GET /api/links", () => {
     const disabled = await createdCode("https://example.com/disabled");
     const expired = await createdCode("https://example.com/expired");
     await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled).execute();
-    // Written by the database's own clock: expires_at is a plain timestamp, a Node Date could be hours off.
-    await testDatabase.updateTable("links").set({ expires_at: sql<Date>`NOW() - INTERVAL '1 minute'` }).where("code", "=", expired).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).where("code", "=", expired).execute();
 
     const response = await listLinks();
 
@@ -558,7 +555,7 @@ describe("PATCH /api/links/:code", () => {
     const response = await patchLink(code, { disabled: true });
 
     expect(response.statusCode).toEqual(404);
-    expect(response.body).toEqual({ error: "Link not found" }); // same answer as a missing code, so codes can't be probed
+    expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
     expect((await storedLink(code)).disabled).toEqual(false);
     expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
   });
@@ -613,6 +610,188 @@ describe("PATCH /api/links/:code", () => {
       expect(setSpy).toHaveBeenCalledTimes(1);
     } finally {
       setSpy.mockRestore();
+      errorLog.mockRestore();
+    }
+  });
+});
+
+function regenerateLink(code: string, withCookie: string | null = cookie) {
+  const request = superRequestAgent.post(`/api/links/${code}/regenerate`);
+
+  return withCookie ? request.set("Cookie", withCookie) : request;
+}
+
+function storedCodes(): Promise<string[]> {
+  return testDatabase.selectFrom("links").select("code").orderBy("id").execute().then((rows) => rows.map((row) => row.code));
+}
+
+describe("POST /api/links/:code/regenerate", () => {
+  it("responds 200 with a new code for the same destination", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code).send({});
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body.code).toMatch(CODE_PATTERN);
+    expect(response.body.code).not.toEqual(code);
+    expect(response.body).toMatchObject({ target_url: TARGET_URL, disabled: false, expires_at: null });
+    expect(Object.keys(response.body).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("works without sending any body", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code);
+
+    expect(response.statusCode).toEqual(200);
+    expect(response.body.code).not.toEqual(code);
+  });
+
+  it("stops the old short link and the new one redirects to the same destination", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code).send({});
+
+    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(404);
+
+    const redirect = await superRequestAgent.get(`/${response.body.code}`);
+
+    expect(redirect.statusCode).toEqual(302);
+    expect(redirect.headers.location).toEqual(TARGET_URL);
+  });
+
+  it("shows the new code in the list and not the old one", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code).send({});
+    const list = await listLinks();
+
+    expect(list.body.map((link: { code: string }) => link.code)).toEqual([response.body.code]);
+  });
+
+  it("keeps the click history, so clicks before and after the change belong to one link", async () => {
+    const code = await createdCode();
+    await superRequestAgent.get(`/${code}`).set("User-Agent", "before");
+
+    const response = await regenerateLink(code).send({});
+    await superRequestAgent.get(`/${response.body.code}`).set("User-Agent", "after");
+
+    const clicks = await testDatabase.selectFrom("clicks").select(["link_id", "user_agent"]).orderBy("id").execute();
+
+    expect(clicks.map((click) => click.user_agent)).toEqual(["before", "after"]);
+    expect(new Set(clicks.map((click) => click.link_id)).size).toEqual(1);
+  });
+
+  it("does not record a click", async () => {
+    const code = await createdCode();
+
+    await regenerateLink(code).send({});
+
+    await expect(countClicks()).resolves.toEqual(0);
+  });
+
+  it("keeps a disabled link disabled", async () => {
+    const code = await createdCode();
+    await patchLink(code, { disabled: true });
+
+    const response = await regenerateLink(code).send({});
+
+    expect(response.body.disabled).toEqual(true);
+    expect((await superRequestAgent.get(`/${response.body.code}`)).statusCode).toEqual(404);
+  });
+
+  it("can be repeated, only the latest code works", async () => {
+    const first = await createdCode();
+    const second = (await regenerateLink(first).send({})).body.code;
+    const third = (await regenerateLink(second).send({})).body.code;
+
+    expect(new Set([first, second, third]).size).toEqual(3);
+    expect((await superRequestAgent.get(`/${first}`)).statusCode).toEqual(404);
+    expect((await superRequestAgent.get(`/${second}`)).statusCode).toEqual(404);
+    expect((await superRequestAgent.get(`/${third}`)).statusCode).toEqual(302);
+  });
+
+  it("lets the new code be managed and the old code not", async () => {
+    const code = await createdCode();
+    const newCode = (await regenerateLink(code).send({})).body.code;
+
+    expect((await patchLink(code, { disabled: true })).statusCode).toEqual(404);
+    expect((await patchLink(newCode, { disabled: true })).statusCode).toEqual(200);
+  });
+
+  it("leaves the owner's other links alone", async () => {
+    const target = await createdCode("https://example.com/target");
+    const other = await createdCode("https://example.com/other");
+
+    await regenerateLink(target).send({});
+
+    expect((await superRequestAgent.get(`/${other}`)).headers.location).toEqual("https://example.com/other");
+  });
+
+  it("responds 404 for a code that does not exist", async () => {
+    const response = await regenerateLink("Nope123").send({});
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" });
+  });
+
+  it("responds 404 and changes nothing for another user's link", async () => {
+    const otherCookie = await signUp("other@example.com");
+    const code = (await createLink({ url: TARGET_URL }, otherCookie)).body.code;
+
+    const response = await regenerateLink(code).send({});
+
+    expect(response.statusCode).toEqual(404);
+    expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
+    await expect(storedCodes()).resolves.toEqual([code]);
+    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+  });
+
+  it.each([
+    ["the body tries to choose the code", { code: "custom1" }],
+    ["the body has a url", { url: "https://evil.example" }],
+    ["the body has any field", { anything: true }],
+  ])("responds 400 and keeps the code when %s", async (_name, body) => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code).send(body);
+
+    expect(response.statusCode).toEqual(400);
+    expect(response.body.error).toEqual("Invalid data");
+    await expect(storedCodes()).resolves.toEqual([code]);
+  });
+
+  it("redirects to /login without a session cookie and keeps the code", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code, null).send({});
+
+    expect(response.statusCode).toEqual(302);
+    expect(response.headers.location).toEqual("/login");
+    await expect(storedCodes()).resolves.toEqual([code]);
+  });
+
+  it("redirects to /login for a cookie that matches no session and keeps the code", async () => {
+    const code = await createdCode();
+
+    const response = await regenerateLink(code, `${SESSION_COOKIE}=not-a-real-cookie`).send({});
+
+    expect(response.statusCode).toEqual(302);
+    await expect(storedCodes()).resolves.toEqual([code]);
+  });
+
+  it("responds 500 when saving fails", async () => {
+    const code = await createdCode();
+    const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+    const regenerateSpy = jest.spyOn(linkService, "regenerateCode").mockRejectedValue(new Error("database down"));
+
+    try {
+      const response = await regenerateLink(code).send({});
+
+      expect(response.statusCode).toEqual(500);
+      expect(regenerateSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      regenerateSpy.mockRestore();
       errorLog.mockRestore();
     }
   });

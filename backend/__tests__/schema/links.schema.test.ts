@@ -1,4 +1,5 @@
 import dotEnv from "dotenv";
+import { sql } from "kysely";
 import { testDatabase } from "../../src/config/database.config";
 import { resetTable } from "../../test-helpers/reset-table";
 
@@ -130,5 +131,34 @@ describe("clicks schema", () => {
     const remaining = await testDatabase.selectFrom("clicks").select("link_id").execute();
 
     expect(remaining.map((click) => click.link_id)).toEqual([kept]);
+  });
+});
+
+describe("time columns", () => {
+  it("are timestamptz, so they do not depend on the machine's time zone", async () => {
+    const result = await sql<{ table_name: string; column_name: string; data_type: string }>`
+      SELECT table_name, column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND (table_name, column_name) IN (('links', 'created_at'), ('links', 'expires_at'), ('clicks', 'clicked_at'))
+      ORDER BY table_name, column_name
+    `.execute(testDatabase);
+
+    expect(result.rows).toEqual([
+      { table_name: "clicks", column_name: "clicked_at", data_type: "timestamp with time zone" },
+      { table_name: "links", column_name: "created_at", data_type: "timestamp with time zone" },
+      { table_name: "links", column_name: "expires_at", data_type: "timestamp with time zone" },
+    ]);
+  });
+
+  it("read back the same time that Node wrote", async () => {
+    const linkId = await insertLink();
+    const oneMinuteAgo = new Date(Date.now() - 60_000);
+
+    await testDatabase.updateTable("links").set({ expires_at: oneMinuteAgo }).where("id", "=", linkId).execute();
+
+    const link = await testDatabase.selectFrom("links").select("expires_at").where("id", "=", linkId).executeTakeFirstOrThrow();
+
+    expect(link.expires_at!.getTime()).toEqual(oneMinuteAgo.getTime());
   });
 });

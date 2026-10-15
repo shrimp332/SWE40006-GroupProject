@@ -1,6 +1,5 @@
 import dotEnv from "dotenv";
 import crypto = require("node:crypto"); // the real module object, a `* as` import wraps it in read-only getters that jest.spyOn can't replace
-import { sql } from "kysely";
 import {
   CODE_LENGTH,
   CODE_PATTERN,
@@ -9,6 +8,7 @@ import {
   generateCode,
   listLinks,
   recordClick,
+  regenerateCode,
   resolveCode,
   setDisabled,
 } from "../../src/services/link.service";
@@ -115,7 +115,7 @@ describe("createLink", () => {
   describe("when a generated code is already taken", () => {
     const TAKEN = "AAAAAAA";
 
-    // Makes the next `calls` characters all index 0, which spells out "AAAAAAA".
+    // Makes the next `calls` random characters all "A", so each 7 calls spell "AAAAAAA"
     function forceTakenCode(calls: number) {
       const randomInt = jest.spyOn(crypto, "randomInt") as unknown as jest.SpyInstance<number>;
 
@@ -161,13 +161,6 @@ describe("createLink", () => {
   });
 });
 
-function setExpiry(offset: "-1 minute" | "+1 minute") {
-  return testDatabase
-    .updateTable("links")
-    .set({ expires_at: sql<Date>`NOW() + ${offset}::interval` })
-    .execute();
-}
-
 function countClicks(): Promise<number> {
   return testDatabase
     .selectFrom("clicks")
@@ -201,14 +194,14 @@ describe("resolveCode", () => {
 
   it("returns null for an expired link", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await setExpiry("-1 minute");
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).execute();
 
     await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
   });
 
   it("returns the link while its expiry is still in the future", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await setExpiry("+1 minute");
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() + 60_000) }).execute();
 
     await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
   });
@@ -325,7 +318,7 @@ describe("listLinks", () => {
     const disabled = await createLink(ownerId, "https://example.com/disabled", testDatabase);
     const expired = await createLink(ownerId, "https://example.com/expired", testDatabase);
     await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled.code).execute();
-    await testDatabase.updateTable("links").set({ expires_at: sql<Date>`NOW() - INTERVAL '1 minute'` }).where("code", "=", expired.code).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).where("code", "=", expired.code).execute();
 
     const links = await listLinks(ownerId, testDatabase);
 
@@ -428,5 +421,175 @@ describe("setDisabled", () => {
 
     await expect(setDisabled(ownerId, code, true, testDatabase)).resolves.toBeNull();
     expect((await storedLink(code)).disabled).toEqual(false);
+  });
+});
+
+describe("regenerateCode", () => {
+  const TAKEN = "AAAAAAA";
+
+  async function insertOtherUser(): Promise<number> {
+    const user = await testDatabase
+      .insertInto("users")
+      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    return user.id;
+  }
+
+  function insertLinkWithCode(code: string, owner: number = ownerId) {
+    return testDatabase.insertInto("links").values({ code, target_url: `https://example.com/${code}`, owner_id: owner }).execute();
+  }
+
+  function codesInDatabase(): Promise<string[]> {
+    return testDatabase.selectFrom("links").select("code").orderBy("id").execute().then((rows) => rows.map((row) => row.code));
+  }
+
+  // Makes the next `calls` random characters all "A", so each 7 calls spell "AAAAAAA"
+  function forceTakenCode(calls: number) {
+    const randomInt = jest.spyOn(crypto, "randomInt") as unknown as jest.SpyInstance<number>;
+
+    for (let i = 0; i < calls; i++) randomInt.mockReturnValueOnce(0);
+
+    return randomInt;
+  }
+
+  it("replaces the code and returns the link", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    const link = await regenerateCode(ownerId, code, testDatabase);
+
+    expect(link).not.toBeNull();
+    expect(link!.code).toMatch(CODE_PATTERN);
+    expect(link!.code).not.toEqual(code);
+    await expect(codesInDatabase()).resolves.toEqual([link!.code]);
+  });
+
+  it("stops the old code working and starts the new one", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    const link = await regenerateCode(ownerId, code, testDatabase);
+
+    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
+    await expect(resolveCode(link!.code, testDatabase)).resolves.toMatchObject({ target_url: TARGET_URL });
+  });
+
+  it("changes only the code", async () => {
+    const created = await createLink(ownerId, TARGET_URL, testDatabase);
+    const before = await testDatabase.selectFrom("links").selectAll().executeTakeFirstOrThrow();
+
+    const link = await regenerateCode(ownerId, created.code, testDatabase);
+
+    const after = await testDatabase.selectFrom("links").selectAll().executeTakeFirstOrThrow();
+
+    expect(after).toEqual({ ...before, code: link!.code });
+    expect(link).toEqual({ ...created, code: link!.code });
+    expect(Object.keys(link!).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
+  });
+
+  it("keeps a disabled link disabled", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await setDisabled(ownerId, code, true, testDatabase);
+
+    const link = await regenerateCode(ownerId, code, testDatabase);
+
+    expect(link!.disabled).toEqual(true);
+    await expect(resolveCode(link!.code, testDatabase)).resolves.toBeNull();
+  });
+
+  it("keeps the click history of the link", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    const { id } = (await resolveCode(code, testDatabase))!;
+    await recordClick(id, "https://social.example/post", "Mozilla/5.0 (test)", testDatabase);
+
+    await regenerateCode(ownerId, code, testDatabase);
+
+    const clicks = await testDatabase.selectFrom("clicks").select(["link_id", "referrer"]).execute();
+
+    expect(clicks).toEqual([{ link_id: id, referrer: "https://social.example/post" }]);
+  });
+
+  it("gives a different code every time", async () => {
+    let { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    const seen = new Set([code]);
+
+    for (let i = 0; i < 5; i++) {
+      code = (await regenerateCode(ownerId, code, testDatabase))!.code;
+      seen.add(code);
+    }
+
+    expect(seen.size).toEqual(6);
+  });
+
+  it("leaves the owner's other links alone", async () => {
+    const target = await createLink(ownerId, "https://example.com/target", testDatabase);
+    const other = await createLink(ownerId, "https://example.com/other", testDatabase);
+
+    await regenerateCode(ownerId, target.code, testDatabase);
+
+    await expect(resolveCode(other.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/other" });
+  });
+
+  it("returns null for a code that does not exist and changes nothing", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+
+    await expect(regenerateCode(ownerId, "Nope123", testDatabase)).resolves.toBeNull();
+    await expect(codesInDatabase()).resolves.toEqual([code]);
+  });
+
+  it("returns null and changes nothing for another user's link", async () => {
+    const otherId = await insertOtherUser();
+    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
+
+    await expect(regenerateCode(ownerId, code, testDatabase)).resolves.toBeNull();
+    await expect(codesInDatabase()).resolves.toEqual([code]);
+  });
+
+  describe("when the new code collides", () => {
+    it("retries with another code when the new one is already taken", async () => {
+      const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+      await insertLinkWithCode(TAKEN);
+      const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+      const randomInt = forceTakenCode(CODE_LENGTH); // first attempt spells the taken code, later ones are random
+
+      try {
+        const link = await regenerateCode(ownerId, code, testDatabase);
+
+        expect(link!.code).not.toEqual(TAKEN);
+        expect(link!.code).not.toEqual(code);
+        await expect(codesInDatabase()).resolves.toEqual(expect.arrayContaining([TAKEN, link!.code]));
+      } finally {
+        randomInt.mockRestore();
+        kyselyErrorLog.mockRestore();
+      }
+    });
+
+    it("never hands back the code the link already has", async () => {
+      await insertLinkWithCode(TAKEN);
+      const randomInt = forceTakenCode(CODE_LENGTH); // first attempt spells the current code
+
+      try {
+        const link = await regenerateCode(ownerId, TAKEN, testDatabase);
+
+        expect(link!.code).not.toEqual(TAKEN);
+      } finally {
+        randomInt.mockRestore();
+      }
+    });
+
+    it("gives up with the unique violation after the maximum number of attempts and keeps the old code", async () => {
+      const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+      await insertLinkWithCode(TAKEN);
+      const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+      const randomInt = forceTakenCode(CODE_LENGTH * MAX_CODE_ATTEMPTS); // every attempt collides
+
+      try {
+        await expect(regenerateCode(ownerId, code, testDatabase)).rejects.toMatchObject({ code: "23505" });
+        await expect(codesInDatabase()).resolves.toEqual([TAKEN, code]);
+      } finally {
+        randomInt.mockRestore();
+        kyselyErrorLog.mockRestore();
+      }
+    });
   });
 });

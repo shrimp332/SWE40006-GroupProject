@@ -18,13 +18,13 @@ export interface Link {
 export function generateCode(): string {
     let code = "";
 
-    // randomInt is uniform, so unlike `byte % 62` it does not favour some characters.
+    // randomInt is uniform, so no character is favoured
     for (let i = 0; i < CODE_LENGTH; i++) code += ALPHABET[randomInt(ALPHABET.length)];
 
     return code;
 }
 
-/** Retries with a fresh code on a collision, throws postgres 23505 only if every attempt collides. */
+/** Retries on a code collision, throws postgres 23505 if every attempt collides. */
 export async function createLink(ownerId: number, targetUrl: string, db: Kysely<any>): Promise<Link> {
     for (let attempt = 1; ; attempt++) {
         try {
@@ -38,7 +38,7 @@ export async function createLink(ownerId: number, targetUrl: string, db: Kysely<
     }
 }
 
-/** All of the owner's links, newest first, including disabled and expired ones so the owner can manage them. */
+/** The owner's links, newest first, including disabled and expired ones. */
 export async function listLinks(ownerId: number, db: Kysely<any>): Promise<Link[]> {
     return db.selectFrom("links")
         .select(["code", "target_url", "created_at", "expires_at", "disabled"])
@@ -48,7 +48,7 @@ export async function listLinks(ownerId: number, db: Kysely<any>): Promise<Link[
         .execute();
 }
 
-/** Returns null when the code does not exist or belongs to another user. */
+/** Returns null if the code does not exist or belongs to another user. */
 export async function setDisabled(ownerId: number, code: string, disabled: boolean, db: Kysely<any>): Promise<Link | null> {
     const link = await db.updateTable("links")
         .set({ disabled })
@@ -58,6 +58,35 @@ export async function setDisabled(ownerId: number, code: string, disabled: boole
         .executeTakeFirst();
 
     return link ?? null;
+}
+
+/**
+ * Gives the link a new random code, so the old one stops working. Click history is kept.
+ * Retries on a collision, throws postgres 23505 if every attempt collides.
+ * Returns null if the code does not exist or belongs to another user.
+ */
+export async function regenerateCode(ownerId: number, code: string, db: Kysely<any>): Promise<Link | null> {
+    for (let attempt = 1; ; attempt++) {
+        const newCode = generateCode();
+
+        if (newCode === code) {
+            if (attempt >= MAX_CODE_ATTEMPTS) throw new Error("Could not generate a code different from the current one");
+            continue;
+        }
+
+        try {
+            const link = await db.updateTable("links")
+                .set({ code: newCode })
+                .where("code", "=", code)
+                .where("owner_id", "=", ownerId)
+                .returning(["code", "target_url", "created_at", "expires_at", "disabled"])
+                .executeTakeFirst();
+
+            return link ?? null;
+        } catch (error: any) {
+            if (error?.code !== "23505" || attempt >= MAX_CODE_ATTEMPTS) throw error;
+        }
+    }
 }
 
 /** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
