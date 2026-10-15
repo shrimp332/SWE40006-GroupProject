@@ -1,6 +1,7 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { Express, Router } from "express";
+import express, { Express, NextFunction, Router } from "express";
+import { Request, Response } from "express-serve-static-core";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { AuthController } from "./controllers/auth.controller";
@@ -19,7 +20,6 @@ export function app(db: Kysely<DB>): Express {
   setupMiddleware(app);
   configApp(app);
   app.use(setupRoutes(db));
-
   return app;
 }
 
@@ -56,4 +56,6 @@ function setupMiddleware(app: Express) {
  */
 function configApp(app: Express) {
   app.disable("x-powered-by");
+  // https://express-rate-limit.mintlify.app/guides/troubleshooting-proxy-issues#the-global-limiter-problem
+  app.set("trust proxy", 1);
 }
