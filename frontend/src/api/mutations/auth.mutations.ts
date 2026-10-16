@@ -1,5 +1,6 @@
 import { mutationOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { toast } from "sonner";
 
 type AuthPayload = {
   email: string;
@@ -16,6 +17,12 @@ const register = mutationOptions({
     await api.post("/register", { json: payload });
     return;
   },
+  onError: () => {
+    toast.error("Failed to register account. Please try again.");
+  },
+  onSuccess: () => {
+    toast.info("Registered successfully. Please login.");
+  },
 });
 
 const login = mutationOptions({
@@ -24,6 +31,12 @@ const login = mutationOptions({
     await api.post("/login", { json: payload });
     return;
   },
+  onError: () => {
+    toast.error("Failed to login to your account. Please try again.");
+  },
+  onSuccess: () => {
+    toast.info("Welcome back.");
+  },
 });
 
 const logout = mutationOptions({
@@ -31,6 +44,9 @@ const logout = mutationOptions({
   mutationFn: async () => {
     await api.post("logout");
     return;
+  },
+  onError: () => {
+    toast.error("Failed to logout from account. Please try again.");
   },
 });
 

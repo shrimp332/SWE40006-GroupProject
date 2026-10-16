@@ -1,5 +1,4 @@
 import AuthenticationForm from "../components/AuthenticationForm";
-import IMG from "./../assets/Subject.png";
 
 function LoginPage() {
   return (
@@ -9,8 +8,6 @@ function LoginPage() {
       <div className="flex-1 mt-12">
         <AuthenticationForm kind="login" />
       </div>
-      {/* Credit: https://www.pngegg.com/en/png-fmoaf */}
-      <img src={IMG} className="absolute bottom-0 w-8 sm:w-16 opacity-25 " />
     </div>
   );
 }
