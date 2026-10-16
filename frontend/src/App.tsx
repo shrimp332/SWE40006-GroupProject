@@ -1,4 +1,5 @@
 import LogoutButton from "./components/LogoutButton";
+import Dashboard from "./components/Dashboard"
 
 function App() {
   return (
@@ -7,7 +8,7 @@ function App() {
         <p>Holy URL Shortner</p>
         <LogoutButton />
       </nav>
-      <main className="p-2">DASHBOARD HERE</main>
+      <main className="p-2"><Dashboard /></main>
     </div>
   );
 }
