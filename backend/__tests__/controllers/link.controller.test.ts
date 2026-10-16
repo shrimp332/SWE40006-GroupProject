@@ -135,11 +135,11 @@ function countClicks(): Promise<number> {
     .then((row) => Number(row.count));
 }
 
-describe("GET /:code", () => {
+describe("GET /x/:code", () => {
   it("responds 302 to the destination without needing a session", async () => {
     const code = await createdCode();
 
-    const response = await superRequestAgent.get(`/${code}`); // no cookie: visitors are not logged in
+    const response = await superRequestAgent.get(`/x/${code}`); // no cookie: visitors are not logged in
 
     expect(response.statusCode).toEqual(302);
     expect(response.headers.location).toEqual(TARGET_URL);
@@ -149,7 +149,7 @@ describe("GET /:code", () => {
     const url = "https://example.com/path?a=1&b=two%20words&c=%E2%9C%93#section";
     const code = await createdCode(url);
 
-    const response = await superRequestAgent.get(`/${code}`);
+    const response = await superRequestAgent.get(`/x/${code}`);
 
     expect(response.headers.location).toEqual(url);
   });
@@ -157,7 +157,7 @@ describe("GET /:code", () => {
   it("records the click with the referrer and user agent", async () => {
     const code = await createdCode();
 
-    await superRequestAgent.get(`/${code}`).set("Referer", "https://social.example/post").set("User-Agent", "Mozilla/5.0 (test)");
+    await superRequestAgent.get(`/x/${code}`).set("Referer", "https://social.example/post").set("User-Agent", "Mozilla/5.0 (test)");
 
     const click = await testDatabase.selectFrom("clicks").select(["referrer", "user_agent"]).executeTakeFirstOrThrow();
 
@@ -165,7 +165,7 @@ describe("GET /:code", () => {
   });
 
   it("responds 404 and records nothing for a code that does not exist", async () => {
-    const response = await superRequestAgent.get("/Nope123");
+    const response = await superRequestAgent.get("/x/Nope123");
 
     expect(response.statusCode).toEqual(404);
     expect(response.headers.location).toBeUndefined();
@@ -176,21 +176,21 @@ describe("GET /:code", () => {
     const code = await createdCode();
 
     await testDatabase.updateTable("links").set({ disabled: true }).execute();
-    const disabled = await superRequestAgent.get(`/${code}`);
+    const disabled = await superRequestAgent.get(`/x/${code}`);
 
     expect(disabled.statusCode).toEqual(404);
     await expect(countClicks()).resolves.toEqual(0);
 
     await testDatabase.updateTable("links").set({ disabled: false }).execute();
 
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(302);
   });
 
   it("responds 404 and records nothing for an expired link", async () => {
     const code = await createdCode();
     await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 86_400_000) }).execute();
 
-    const response = await superRequestAgent.get(`/${code}`);
+    const response = await superRequestAgent.get(`/x/${code}`);
 
     expect(response.statusCode).toEqual(404);
     await expect(countClicks()).resolves.toEqual(0);
@@ -203,7 +203,7 @@ describe("GET /:code", () => {
     const resolveCode = jest.spyOn(linkService, "resolveCode");
 
     try {
-      const response = await superRequestAgent.get(`/${code}`);
+      const response = await superRequestAgent.get(`/x/${code}`);
 
       expect(response.statusCode).toEqual(404);
       expect(resolveCode).not.toHaveBeenCalled();
@@ -218,7 +218,7 @@ describe("GET /:code", () => {
     const recordClick = jest.spyOn(linkService, "recordClick").mockRejectedValue(new Error("analytics down"));
 
     try {
-      const response = await superRequestAgent.get(`/${code}`);
+      const response = await superRequestAgent.get(`/x/${code}`);
 
       expect(recordClick).toHaveBeenCalledTimes(1);
       expect(response.statusCode).toEqual(302);
@@ -235,7 +235,7 @@ describe("GET /:code", () => {
     const resolveCode = jest.spyOn(linkService, "resolveCode").mockRejectedValue(new Error("database down"));
 
     try {
-      const response = await superRequestAgent.get(`/${code}`);
+      const response = await superRequestAgent.get(`/x/${code}`);
 
       expect(response.statusCode).toEqual(500);
       expect(response.headers.location).toBeUndefined();
@@ -331,7 +331,7 @@ describe("PATCH /api/links/:code", () => {
 
     expect(response.statusCode).toEqual(200);
     expect(response.body).toMatchObject({ code, target_url: TARGET_URL, disabled: true });
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(404);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(404);
   });
 
   it("enables the link again and its short link redirects again", async () => {
@@ -343,7 +343,7 @@ describe("PATCH /api/links/:code", () => {
     expect(response.statusCode).toEqual(200);
     expect(response.body.disabled).toEqual(false);
 
-    const redirect = await superRequestAgent.get(`/${code}`);
+    const redirect = await superRequestAgent.get(`/x/${code}`);
 
     expect(redirect.statusCode).toEqual(302);
     expect(redirect.headers.location).toEqual(TARGET_URL);
@@ -358,7 +358,7 @@ describe("PATCH /api/links/:code", () => {
 
     expect(await storedLink(target)).toEqual({ ...before, disabled: true });
     expect((await storedLink(other)).disabled).toEqual(false);
-    expect((await superRequestAgent.get(`/${other}`)).statusCode).toEqual(302);
+    expect((await superRequestAgent.get(`/x/${other}`)).statusCode).toEqual(302);
   });
 
   it("responds 404 for a code that does not exist", async () => {
@@ -377,7 +377,7 @@ describe("PATCH /api/links/:code", () => {
     expect(response.statusCode).toEqual(404);
     expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
     expect((await storedLink(code)).disabled).toEqual(false);
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(302);
   });
 
   it.each([
@@ -444,9 +444,9 @@ describe("POST /api/links/:code/regenerate", () => {
 
     const response = await regenerateLink(code).send({});
 
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(404);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(404);
 
-    const redirect = await superRequestAgent.get(`/${response.body.code}`);
+    const redirect = await superRequestAgent.get(`/x/${response.body.code}`);
 
     expect(redirect.statusCode).toEqual(302);
     expect(redirect.headers.location).toEqual(TARGET_URL);
@@ -454,10 +454,10 @@ describe("POST /api/links/:code/regenerate", () => {
 
   it("keeps the click history, so clicks before and after the change belong to one link", async () => {
     const code = await createdCode();
-    await superRequestAgent.get(`/${code}`).set("User-Agent", "before");
+    await superRequestAgent.get(`/x/${code}`).set("User-Agent", "before");
 
     const response = await regenerateLink(code).send({});
-    await superRequestAgent.get(`/${response.body.code}`).set("User-Agent", "after");
+    await superRequestAgent.get(`/x/${response.body.code}`).set("User-Agent", "after");
 
     const clicks = await testDatabase.selectFrom("clicks").select(["link_id", "user_agent"]).orderBy("id").execute();
 
@@ -481,7 +481,7 @@ describe("POST /api/links/:code/regenerate", () => {
     expect(response.statusCode).toEqual(404);
     expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
     await expect(storedCodes()).resolves.toEqual([code]);
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(302);
   });
 
   it.each([
@@ -530,7 +530,7 @@ describe("DELETE /api/links/:code", () => {
 
     await deleteLink(code);
 
-    const response = await superRequestAgent.get(`/${code}`);
+    const response = await superRequestAgent.get(`/x/${code}`);
 
     expect(response.statusCode).toEqual(404);
     expect(response.headers.location).toBeUndefined();
@@ -538,8 +538,8 @@ describe("DELETE /api/links/:code", () => {
 
   it("deletes the link's clicks with it", async () => {
     const code = await createdCode();
-    await superRequestAgent.get(`/${code}`);
-    await superRequestAgent.get(`/${code}`);
+    await superRequestAgent.get(`/x/${code}`);
+    await superRequestAgent.get(`/x/${code}`);
 
     await deleteLink(code);
 
@@ -549,12 +549,12 @@ describe("DELETE /api/links/:code", () => {
   it("leaves the owner's other links and their clicks alone", async () => {
     const doomed = await createdCode("https://example.com/doomed");
     const kept = await createdCode("https://example.com/kept");
-    await superRequestAgent.get(`/${doomed}`);
-    await superRequestAgent.get(`/${kept}`);
+    await superRequestAgent.get(`/x/${doomed}`);
+    await superRequestAgent.get(`/x/${kept}`);
 
     await deleteLink(doomed);
 
-    expect((await superRequestAgent.get(`/${kept}`)).headers.location).toEqual("https://example.com/kept");
+    expect((await superRequestAgent.get(`/x/${kept}`)).headers.location).toEqual("https://example.com/kept");
     await expect(countClicks()).resolves.toEqual(2); // the kept link's first click plus the one just made
   });
 
@@ -574,7 +574,7 @@ describe("DELETE /api/links/:code", () => {
     expect(response.statusCode).toEqual(404);
     expect(response.body).toEqual({ error: "Link not found" }); // same 404 as a missing code
     await expect(storedCodes()).resolves.toEqual([code]);
-    expect((await superRequestAgent.get(`/${code}`)).statusCode).toEqual(302);
+    expect((await superRequestAgent.get(`/x/${code}`)).statusCode).toEqual(302);
   });
 
   it("redirects to /login without a session cookie and deletes nothing", async () => {
@@ -596,7 +596,7 @@ function getStats(code: string, withCookie: string | null = cookie) {
 }
 
 function visit(code: string, headers: { referer?: string; userAgent?: string } = {}) {
-  const request = superRequestAgent.get(`/${code}`);
+  const request = superRequestAgent.get(`/x/${code}`);
 
   if (headers.referer) request.set("Referer", headers.referer);
 
