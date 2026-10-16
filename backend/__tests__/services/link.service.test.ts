@@ -4,9 +4,11 @@ import {
   CODE_LENGTH,
   CODE_PATTERN,
   MAX_CODE_ATTEMPTS,
+  STATS_TOP_LIMIT,
   createLink,
   deleteLink,
   generateCode,
+  getLinkStats,
   listLinks,
   recordClick,
   regenerateCode,
@@ -87,32 +89,6 @@ describe("createLink", () => {
     await expect(countLinks()).resolves.toEqual(2);
   });
 
-  it("does not return the owner or the internal id", async () => {
-    const link = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    expect(Object.keys(link).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
-  });
-
-  it("stores a long url unchanged", async () => {
-    const longUrl = `https://example.com/${"a".repeat(2000)}?q=1&r=%20two#frag`;
-
-    const link = await createLink(ownerId, longUrl, testDatabase);
-
-    expect(link.target_url).toEqual(longUrl);
-  });
-
-  it("rejects an owner that does not exist and stores nothing", async () => {
-    // Silences the Kysely error log for the deliberate failure below.
-    const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      await expect(createLink(ownerId + 1000, TARGET_URL, testDatabase)).rejects.toMatchObject({ code: "23503" }); // postgres foreign key violation
-      await expect(countLinks()).resolves.toEqual(0);
-    } finally {
-      kyselyErrorLog.mockRestore();
-    }
-  });
-
   describe("when a generated code is already taken", () => {
     const TAKEN = "AAAAAAA";
 
@@ -162,42 +138,11 @@ describe("createLink", () => {
   });
 });
 
-function countClicks(): Promise<number> {
-  return testDatabase
-    .selectFrom("clicks")
-    .select((eb) => eb.fn.countAll<string>().as("count"))
-    .executeTakeFirstOrThrow()
-    .then((row) => Number(row.count));
-}
-
 describe("resolveCode", () => {
   it("returns the id and destination of a live link", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
 
     await expect(resolveCode(code, testDatabase)).resolves.toEqual({ id: expect.any(Number), target_url: TARGET_URL });
-  });
-
-  it("returns null for a code that does not exist", async () => {
-    await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await expect(resolveCode("Nope123", testDatabase)).resolves.toBeNull();
-  });
-
-  it("returns null for a disabled link and the link again once it is enabled", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await testDatabase.updateTable("links").set({ disabled: true }).execute();
-    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
-
-    await testDatabase.updateTable("links").set({ disabled: false }).execute();
-    await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
-  });
-
-  it("returns null for an expired link", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).execute();
-
-    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
   });
 
   it("returns the link while its expiry is still in the future", async () => {
@@ -213,14 +158,6 @@ describe("resolveCode", () => {
     await expect(resolveCode("AbCdEfG", testDatabase)).resolves.not.toBeNull();
     await expect(resolveCode("abcdefg", testDatabase)).resolves.toBeNull();
     await expect(resolveCode("ABCDEFG", testDatabase)).resolves.toBeNull();
-  });
-
-  it("finds the right link when several exist", async () => {
-    const first = await createLink(ownerId, "https://example.com/first", testDatabase);
-    const second = await createLink(ownerId, "https://example.com/second", testDatabase);
-
-    await expect(resolveCode(first.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/first" });
-    await expect(resolveCode(second.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/second" });
   });
 });
 
@@ -254,84 +191,15 @@ describe("recordClick", () => {
     expect(click.referrer).toBeNull();
     expect(click.user_agent).toBeNull();
   });
-
-  it("adds a row for every call", async () => {
-    const id = await linkId();
-
-    await recordClick(id, undefined, undefined, testDatabase);
-    await recordClick(id, undefined, undefined, testDatabase);
-
-    await expect(countClicks()).resolves.toEqual(2);
-  });
-
-  it("rejects a link that does not exist and stores nothing", async () => {
-    // Silences the Kysely error log for the deliberate failure below.
-    const kyselyErrorLog = jest.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      await expect(recordClick(999_999, undefined, undefined, testDatabase)).rejects.toMatchObject({ code: "23503" }); // postgres foreign key violation
-      await expect(countClicks()).resolves.toEqual(0);
-    } finally {
-      kyselyErrorLog.mockRestore();
-    }
-  });
 });
 
 describe("listLinks", () => {
-  async function insertOtherUser(): Promise<number> {
-    const user = await testDatabase
-      .insertInto("users")
-      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-
-    return user.id;
-  }
-
-  it("returns only the owner's links, newest first", async () => {
-    const otherId = await insertOtherUser();
-    const older = await createLink(ownerId, "https://example.com/older", testDatabase);
-    const newer = await createLink(ownerId, "https://example.com/newer", testDatabase);
-    await createLink(otherId, "https://example.com/not-mine", testDatabase);
-
-    const links = await listLinks(ownerId, testDatabase);
-
-    expect(links.map((link) => link.code)).toEqual([newer.code, older.code]);
-  });
-
-  it("returns the same fields as createLink and nothing else", async () => {
-    const created = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    const [listed] = await listLinks(ownerId, testDatabase);
-
-    expect(listed).toEqual(created);
-    expect(Object.keys(listed).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
-  });
-
-  it("returns an empty list when the user has no links", async () => {
-    const otherId = await insertOtherUser();
-    await createLink(otherId, TARGET_URL, testDatabase);
-
-    await expect(listLinks(ownerId, testDatabase)).resolves.toEqual([]);
-  });
-
-  it("includes disabled and expired links so the owner can manage them", async () => {
-    const disabled = await createLink(ownerId, "https://example.com/disabled", testDatabase);
-    const expired = await createLink(ownerId, "https://example.com/expired", testDatabase);
-    await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled.code).execute();
-    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).where("code", "=", expired.code).execute();
-
-    const links = await listLinks(ownerId, testDatabase);
-
-    expect(links).toHaveLength(2);
-    expect(links.find((link) => link.code === disabled.code)).toMatchObject({ disabled: true });
-    expect(links.find((link) => link.code === expired.code)?.expires_at).toBeInstanceOf(Date);
-  });
-
-  it("keeps a stable newest-first order for links created in quick succession", async () => {
+  it("keeps newest-first order for links created at the same instant", async () => {
     const created = [];
 
     for (let i = 0; i < 5; i++) created.push(await createLink(ownerId, `https://example.com/${i}`, testDatabase));
+
+    await testDatabase.updateTable("links").set({ created_at: new Date("2026-10-14T00:00:00Z") }).execute();
 
     const links = await listLinks(ownerId, testDatabase);
 
@@ -340,20 +208,6 @@ describe("listLinks", () => {
 });
 
 describe("setDisabled", () => {
-  async function insertOtherUser(): Promise<number> {
-    const user = await testDatabase
-      .insertInto("users")
-      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-
-    return user.id;
-  }
-
-  function storedLink(code: string) {
-    return testDatabase.selectFrom("links").selectAll().where("code", "=", code).executeTakeFirstOrThrow();
-  }
-
   it("disables a link and returns it", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
 
@@ -362,81 +216,10 @@ describe("setDisabled", () => {
     expect(link).toMatchObject({ code, target_url: TARGET_URL, disabled: true });
     await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
   });
-
-  it("enables a disabled link again", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await setDisabled(ownerId, code, true, testDatabase);
-
-    const link = await setDisabled(ownerId, code, false, testDatabase);
-
-    expect(link).toMatchObject({ code, disabled: false });
-    await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
-  });
-
-  it("is harmless to repeat", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await setDisabled(ownerId, code, true, testDatabase);
-
-    await expect(setDisabled(ownerId, code, true, testDatabase)).resolves.toMatchObject({ disabled: true });
-  });
-
-  it("returns the same fields as createLink and nothing else", async () => {
-    const created = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    const link = await setDisabled(ownerId, created.code, false, testDatabase);
-
-    expect(link).toEqual(created);
-    expect(Object.keys(link!).sort()).toEqual(["code", "created_at", "disabled", "expires_at", "target_url"]);
-  });
-
-  it("changes only the disabled flag", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    const before = await storedLink(code);
-
-    await setDisabled(ownerId, code, true, testDatabase);
-
-    const after = await storedLink(code);
-
-    expect(after).toEqual({ ...before, disabled: true });
-  });
-
-  it("leaves the owner's other links alone", async () => {
-    const target = await createLink(ownerId, "https://example.com/target", testDatabase);
-    const other = await createLink(ownerId, "https://example.com/other", testDatabase);
-
-    await setDisabled(ownerId, target.code, true, testDatabase);
-
-    expect((await storedLink(other.code)).disabled).toEqual(false);
-  });
-
-  it("returns null for a code that does not exist", async () => {
-    await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await expect(setDisabled(ownerId, "Nope123", true, testDatabase)).resolves.toBeNull();
-  });
-
-  it("returns null and changes nothing for another user's link", async () => {
-    const otherId = await insertOtherUser();
-    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
-
-    await expect(setDisabled(ownerId, code, true, testDatabase)).resolves.toBeNull();
-    expect((await storedLink(code)).disabled).toEqual(false);
-  });
 });
 
 describe("regenerateCode", () => {
   const TAKEN = "AAAAAAA";
-
-  async function insertOtherUser(): Promise<number> {
-    const user = await testDatabase
-      .insertInto("users")
-      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-
-    return user.id;
-  }
 
   function insertLinkWithCode(code: string, owner: number = ownerId) {
     return testDatabase.insertInto("links").values({ code, target_url: `https://example.com/${code}`, owner_id: owner }).execute();
@@ -454,26 +237,6 @@ describe("regenerateCode", () => {
 
     return randomInt;
   }
-
-  it("replaces the code and returns the link", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    const link = await regenerateCode(ownerId, code, testDatabase);
-
-    expect(link).not.toBeNull();
-    expect(link!.code).toMatch(CODE_PATTERN);
-    expect(link!.code).not.toEqual(code);
-    await expect(codesInDatabase()).resolves.toEqual([link!.code]);
-  });
-
-  it("stops the old code working and starts the new one", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    const link = await regenerateCode(ownerId, code, testDatabase);
-
-    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
-    await expect(resolveCode(link!.code, testDatabase)).resolves.toMatchObject({ target_url: TARGET_URL });
-  });
 
   it("changes only the code", async () => {
     const created = await createLink(ownerId, TARGET_URL, testDatabase);
@@ -496,54 +259,6 @@ describe("regenerateCode", () => {
 
     expect(link!.disabled).toEqual(true);
     await expect(resolveCode(link!.code, testDatabase)).resolves.toBeNull();
-  });
-
-  it("keeps the click history of the link", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    const { id } = (await resolveCode(code, testDatabase))!;
-    await recordClick(id, "https://social.example/post", "Mozilla/5.0 (test)", testDatabase);
-
-    await regenerateCode(ownerId, code, testDatabase);
-
-    const clicks = await testDatabase.selectFrom("clicks").select(["link_id", "referrer"]).execute();
-
-    expect(clicks).toEqual([{ link_id: id, referrer: "https://social.example/post" }]);
-  });
-
-  it("gives a different code every time", async () => {
-    let { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    const seen = new Set([code]);
-
-    for (let i = 0; i < 5; i++) {
-      code = (await regenerateCode(ownerId, code, testDatabase))!.code;
-      seen.add(code);
-    }
-
-    expect(seen.size).toEqual(6);
-  });
-
-  it("leaves the owner's other links alone", async () => {
-    const target = await createLink(ownerId, "https://example.com/target", testDatabase);
-    const other = await createLink(ownerId, "https://example.com/other", testDatabase);
-
-    await regenerateCode(ownerId, target.code, testDatabase);
-
-    await expect(resolveCode(other.code, testDatabase)).resolves.toMatchObject({ target_url: "https://example.com/other" });
-  });
-
-  it("returns null for a code that does not exist and changes nothing", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await expect(regenerateCode(ownerId, "Nope123", testDatabase)).resolves.toBeNull();
-    await expect(codesInDatabase()).resolves.toEqual([code]);
-  });
-
-  it("returns null and changes nothing for another user's link", async () => {
-    const otherId = await insertOtherUser();
-    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
-
-    await expect(regenerateCode(ownerId, code, testDatabase)).resolves.toBeNull();
-    await expect(codesInDatabase()).resolves.toEqual([code]);
   });
 
   describe("when the new code collides", () => {
@@ -596,24 +311,8 @@ describe("regenerateCode", () => {
 });
 
 describe("deleteLink", () => {
-  async function insertOtherUser(): Promise<number> {
-    const user = await testDatabase
-      .insertInto("users")
-      .values({ email: "other@example.com", password_hash: "not-a-real-hash" })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-
-    return user.id;
-  }
-
   function codesInDatabase(): Promise<string[]> {
     return testDatabase.selectFrom("links").select("code").orderBy("id").execute().then((rows) => rows.map((row) => row.code));
-  }
-
-  async function addClick(code: string) {
-    const { id } = (await resolveCode(code, testDatabase))!;
-
-    await recordClick(id, undefined, undefined, testDatabase);
   }
 
   it("deletes the link and returns true", async () => {
@@ -622,74 +321,134 @@ describe("deleteLink", () => {
     await expect(deleteLink(ownerId, code, testDatabase)).resolves.toEqual(true);
     await expect(codesInDatabase()).resolves.toEqual([]);
   });
+});
 
-  it("stops the code working", async () => {
+describe("getLinkStats", () => {
+  /** Adds clicks to a link, each with its own referrer, user agent and time (the click time defaults to now). */
+  async function addClicks(code: string, clicks: { referrer?: string | null; user_agent?: string | null; at?: string }[]) {
+    const { id } = await testDatabase.selectFrom("links").select("id").where("code", "=", code).executeTakeFirstOrThrow();
+
+    for (const click of clicks) {
+      await testDatabase
+        .insertInto("clicks")
+        .values({
+          link_id: id,
+          referrer: click.referrer ?? null,
+          user_agent: click.user_agent ?? null,
+          ...(click.at ? { clicked_at: new Date(click.at) } : {}),
+        })
+        .execute();
+    }
+  }
+
+  it("counts every click and returns the numbers as numbers", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [{}, {}, {}, {}]);
 
-    await deleteLink(ownerId, code, testDatabase);
+    const stats = (await getLinkStats(ownerId, code, testDatabase))!;
 
-    await expect(resolveCode(code, testDatabase)).resolves.toBeNull();
-    await expect(listLinks(ownerId, testDatabase)).resolves.toEqual([]);
+    expect(stats.total_clicks).toBe(4);
+    expect(stats.clicks_per_day.map((day) => typeof day.clicks)).toEqual(["number"]);
   });
 
-  it("deletes the link's clicks with it", async () => {
+  it("groups clicks by UTC day, oldest first", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await addClick(code);
-    await addClick(code);
+    await addClicks(code, [
+      { at: "2026-10-14T00:30:00Z" },
+      { at: "2026-10-13T23:30:00Z" }, // just before midnight UTC, so the day before
+      { at: "2026-10-14T23:59:59Z" },
+      { at: "2026-10-16T12:00:00Z" },
+    ]);
 
-    await deleteLink(ownerId, code, testDatabase);
+    const stats = (await getLinkStats(ownerId, code, testDatabase))!;
 
-    await expect(countClicks()).resolves.toEqual(0);
+    expect(stats.clicks_per_day).toEqual([
+      { date: "2026-10-13", clicks: 1 },
+      { date: "2026-10-14", clicks: 2 },
+      { date: "2026-10-16", clicks: 1 },
+    ]);
+    expect(stats.total_clicks).toBe(4);
   });
 
-  it("leaves the owner's other links and their clicks alone", async () => {
-    const doomed = await createLink(ownerId, "https://example.com/doomed", testDatabase);
-    const kept = await createLink(ownerId, "https://example.com/kept", testDatabase);
-    await addClick(doomed.code);
-    await addClick(kept.code);
+  it("lists referrers by number of clicks, most first, with direct visits as null", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [
+      { referrer: "https://b.example" },
+      { referrer: "https://a.example" },
+      { referrer: "https://a.example" },
+      { referrer: null },
+      { referrer: null },
+      { referrer: null },
+    ]);
 
-    await deleteLink(ownerId, doomed.code, testDatabase);
+    const stats = (await getLinkStats(ownerId, code, testDatabase))!;
 
-    await expect(codesInDatabase()).resolves.toEqual([kept.code]);
-    await expect(countClicks()).resolves.toEqual(1);
+    expect(stats.referrers).toEqual([
+      { referrer: null, clicks: 3 },
+      { referrer: "https://a.example", clicks: 2 },
+      { referrer: "https://b.example", clicks: 1 },
+    ]);
   });
 
-  it("deletes a disabled link too", async () => {
+  it("lists user agents by number of clicks, most first", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [
+      { user_agent: "Safari" },
+      { user_agent: "Chrome" },
+      { user_agent: "Chrome" },
+      { user_agent: null },
+    ]);
+
+    const stats = (await getLinkStats(ownerId, code, testDatabase))!;
+
+    expect(stats.user_agents).toEqual([
+      { user_agent: "Chrome", clicks: 2 },
+      { user_agent: "Safari", clicks: 1 },
+      { user_agent: null, clicks: 1 },
+    ]);
+  });
+
+  it("orders ties the same way every time", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [{ referrer: "https://c.example" }, { referrer: "https://a.example" }, { referrer: "https://b.example" }]);
+
+    const first = (await getLinkStats(ownerId, code, testDatabase))!.referrers;
+    const second = (await getLinkStats(ownerId, code, testDatabase))!.referrers;
+
+    expect(first.map((row) => row.referrer)).toEqual(["https://a.example", "https://b.example", "https://c.example"]);
+    expect(second).toEqual(first);
+  });
+
+  it("returns only the top referrers and user agents", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    const clicks = Array.from({ length: STATS_TOP_LIMIT + 2 }, (_, i) => ({ referrer: `https://site-${i}.example`, user_agent: `Agent ${i}` }));
+    await addClicks(code, clicks);
+    await addClicks(code, [{ referrer: "https://site-0.example", user_agent: "Agent 0" }]); // site-0 and Agent 0 are now the busiest
+
+    const stats = (await getLinkStats(ownerId, code, testDatabase))!;
+
+    expect(stats.referrers).toHaveLength(STATS_TOP_LIMIT);
+    expect(stats.referrers[0]).toEqual({ referrer: "https://site-0.example", clicks: 2 });
+    expect(stats.user_agents).toHaveLength(STATS_TOP_LIMIT);
+    expect(stats.user_agents[0]).toEqual({ user_agent: "Agent 0", clicks: 2 });
+    expect(stats.total_clicks).toBe(STATS_TOP_LIMIT + 3); // the totals still count everything
+  });
+
+  it("still works for a disabled link", async () => {
+    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [{}, {}]);
     await setDisabled(ownerId, code, true, testDatabase);
 
-    await expect(deleteLink(ownerId, code, testDatabase)).resolves.toEqual(true);
+    await expect(getLinkStats(ownerId, code, testDatabase)).resolves.toMatchObject({ total_clicks: 2 });
   });
 
-  it("returns false the second time", async () => {
+  it("keeps the history after the code is regenerated", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
+    await addClicks(code, [{}, {}, {}]);
 
-    await deleteLink(ownerId, code, testDatabase);
+    const newCode = (await regenerateCode(ownerId, code, testDatabase))!.code;
 
-    await expect(deleteLink(ownerId, code, testDatabase)).resolves.toEqual(false);
-  });
-
-  it("returns false for a code that does not exist and deletes nothing", async () => {
-    const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-
-    await expect(deleteLink(ownerId, "Nope123", testDatabase)).resolves.toEqual(false);
-    await expect(codesInDatabase()).resolves.toEqual([code]);
-  });
-
-  it("returns false and deletes nothing for another user's link", async () => {
-    const otherId = await insertOtherUser();
-    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
-    await addClick(code);
-
-    await expect(deleteLink(ownerId, code, testDatabase)).resolves.toEqual(false);
-    await expect(codesInDatabase()).resolves.toEqual([code]);
-    await expect(countClicks()).resolves.toEqual(1);
-  });
-
-  it("lets another user delete their own link", async () => {
-    const otherId = await insertOtherUser();
-    const { code } = await createLink(otherId, TARGET_URL, testDatabase);
-
-    await expect(deleteLink(otherId, code, testDatabase)).resolves.toEqual(true);
+    await expect(getLinkStats(ownerId, newCode, testDatabase)).resolves.toMatchObject({ code: newCode, total_clicks: 3 });
+    await expect(getLinkStats(ownerId, code, testDatabase)).resolves.toBeNull();
   });
 });

@@ -15,6 +15,18 @@ export interface Link {
     disabled: boolean;
 }
 
+export const STATS_TOP_LIMIT = 10;
+
+export interface LinkStats {
+    code: string;
+    total_clicks: number;
+    /** Days (UTC) that had at least one click, oldest first. */
+    clicks_per_day: { date: string; clicks: number }[];
+    /** Most common referrers. A null referrer means the visitor came directly. */
+    referrers: { referrer: string | null; clicks: number }[];
+    user_agents: { user_agent: string | null; clicks: number }[];
+}
+
 export function generateCode(): string {
     let code = "";
 
@@ -97,6 +109,39 @@ export async function deleteLink(ownerId: number, code: string, db: Kysely<any>)
         .executeTakeFirst();
 
     return Number(result.numDeletedRows) > 0;
+}
+
+/** Click statistics for the owner's link. Returns null if the code does not exist. */
+export async function getLinkStats(ownerId: number, code: string, db: Kysely<any>): Promise<LinkStats | null> {
+    const link = await db.selectFrom("links")
+        .select("id")
+        .where("code", "=", code)
+        .where("owner_id", "=", ownerId)
+        .executeTakeFirst();
+
+    if (!link) return null;
+
+    const clicks = () => db.selectFrom("clicks").where("link_id", "=", link.id);
+    const count = sql<string>`COUNT(*)`.as("clicks");
+
+    const [total, perDay, referrers, userAgents] = await Promise.all([
+        clicks().select(count).executeTakeFirstOrThrow(),
+        clicks()
+            .select([sql<string>`TO_CHAR(clicked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')`.as("date"), count])
+            .groupBy("date")
+            .orderBy("date")
+            .execute(),
+        clicks().select(["referrer", count]).groupBy("referrer").orderBy("clicks", "desc").orderBy("referrer").limit(STATS_TOP_LIMIT).execute(),
+        clicks().select(["user_agent", count]).groupBy("user_agent").orderBy("clicks", "desc").orderBy("user_agent").limit(STATS_TOP_LIMIT).execute(),
+    ]);
+
+    return {
+        code,
+        total_clicks: Number(total.clicks),
+        clicks_per_day: perDay.map((row) => ({ date: row.date, clicks: Number(row.clicks) })),
+        referrers: referrers.map((row) => ({ referrer: row.referrer, clicks: Number(row.clicks) })),
+        user_agents: userAgents.map((row) => ({ user_agent: row.user_agent, clicks: Number(row.clicks) })),
+    };
 }
 
 /** Returns the link to redirect to, or null if the code is unknown, disabled or expired. */
