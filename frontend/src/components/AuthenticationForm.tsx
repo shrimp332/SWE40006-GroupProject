@@ -1,4 +1,4 @@
-import { formOptions, useForm } from "@tanstack/react-form";
+import { formOptions, useForm, useSelector } from "@tanstack/react-form";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import z from "zod";
@@ -9,12 +9,11 @@ type Authentication = {
   password: string;
 };
 
-const authSchema = z.object({
-  email: z.email().max(320),
-  password: z.string().min(1).max(200),
-});
-
 function AuthenticationForm({ kind }: { kind: "login" | "register" }) {
+  const authSchema = z.object({
+    email: z.email().max(320),
+    password: z.string().min(1).max(200),
+  });
   const defaultValues: Authentication = { email: "", password: "" };
   const navigate = useNavigate();
 
@@ -26,7 +25,7 @@ function AuthenticationForm({ kind }: { kind: "login" | "register" }) {
   const formOps = formOptions({
     defaultValues,
     validators: {
-      onBlur: authSchema,
+      onSubmit: authSchema,
     },
   });
 
@@ -38,6 +37,8 @@ function AuthenticationForm({ kind }: { kind: "login" | "register" }) {
       });
     },
   });
+
+  const formErrorMap = useSelector(form.store, (state) => state.errorMap);
 
   return (
     <form
@@ -63,13 +64,6 @@ function AuthenticationForm({ kind }: { kind: "login" | "register" }) {
                   placeholder="Enter your email address..."
                   className="border p-2 bg-zinc-100 border-zinc-200 outline-none focus:border-zinc-400"
                 />
-                <div>
-                  {field.state.meta.errors.map((error, idx) => (
-                    <p key={idx} className="text-red-700">
-                      {error?.message}
-                    </p>
-                  ))}
-                </div>
               </label>
             </>
           )}
@@ -88,17 +82,18 @@ function AuthenticationForm({ kind }: { kind: "login" | "register" }) {
                   placeholder="Enter your password..."
                   className="border p-2 bg-zinc-100 border-zinc-200 outline-none focus:border-zinc-400"
                 />
-                <div>
-                  {field.state.meta.errors.map((error, idx) => (
-                    <p key={idx} className="text-red-700">
-                      {error?.message}
-                    </p>
-                  ))}
-                </div>
               </label>
             </>
           )}
         />
+      </div>
+
+      <div className="mt-2">
+        {formErrorMap.onSubmit ? (
+          <div>
+            <em className="text-red-700">{kind} failed</em>
+          </div>
+        ) : null}
       </div>
 
       <div className={`flex flex-col gap-2 items-center mt-8 sm:w-72 w-full`}>

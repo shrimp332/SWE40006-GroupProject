@@ -1,7 +1,7 @@
 import ky, { isHTTPError } from "ky";
 
 export const api = ky.extend({
-  prefix: import.meta.env.VITE_APP_MODE === "dev" ? "http://localhost:8080/api/" : "https://SAMPLE_DOMAIN/api/",
+  prefix: "/api",
   credentials: "include",
   retry: {
     limit: 1,
