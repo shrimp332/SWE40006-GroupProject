@@ -47,7 +47,7 @@ function setupRoutes(db: Kysely<DB>) {
   router.delete("/api/links/:code", authMiddleware(db), linkController.Delete.bind(linkController));
   router.get("/api/links/:code/stats", authMiddleware(db), linkController.Stats.bind(linkController));
 
-  router.get("/:code", linkController.Redirect.bind(linkController));
+  router.get("/x/:code", linkController.Redirect.bind(linkController));
 
   return router;
 }
