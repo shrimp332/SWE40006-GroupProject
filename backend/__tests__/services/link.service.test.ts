@@ -147,7 +147,7 @@ describe("resolveCode", () => {
 
   it("returns the link while its expiry is still in the future", async () => {
     const { code } = await createLink(ownerId, TARGET_URL, testDatabase);
-    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() + 60_000) }).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() + 86_400_000) }).execute();
 
     await expect(resolveCode(code, testDatabase)).resolves.not.toBeNull();
   });

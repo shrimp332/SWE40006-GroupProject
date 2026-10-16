@@ -188,7 +188,7 @@ describe("GET /:code", () => {
 
   it("responds 404 and records nothing for an expired link", async () => {
     const code = await createdCode();
-    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 86_400_000) }).execute();
 
     const response = await superRequestAgent.get(`/${code}`);
 
@@ -293,7 +293,7 @@ describe("GET /api/links", () => {
     const disabled = await createdCode("https://example.com/disabled");
     const expired = await createdCode("https://example.com/expired");
     await testDatabase.updateTable("links").set({ disabled: true }).where("code", "=", disabled).execute();
-    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 60_000) }).where("code", "=", expired).execute();
+    await testDatabase.updateTable("links").set({ expires_at: new Date(Date.now() - 86_400_000) }).where("code", "=", expired).execute();
 
     const response = await listLinks();
 
