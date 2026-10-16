@@ -1,6 +1,7 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { Express, Router } from "express";
+import express, { Express, NextFunction, Router } from "express";
+import { Request, Response } from "express-serve-static-core";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { AuthController } from "./controllers/auth.controller";
@@ -15,6 +16,7 @@ import { linkSchema } from "./validation-schemas/link.schema";
 import { healthSchema } from "./validation-schemas/health.schema.ts/health.schema";
 import { Kysely } from "kysely";
 import { DB } from "./types/kysely-types";
+import { MeController } from "./controllers/me.controller";
 
 export function app(db: Kysely<DB>): Express {
   const app = express();
@@ -22,7 +24,6 @@ export function app(db: Kysely<DB>): Express {
   setupMiddleware(app);
   configApp(app);
   app.use(setupRoutes(db));
-
   return app;
 }
 
@@ -31,6 +32,7 @@ function setupRoutes(db: Kysely<DB>) {
   const healthController = new HealthController(db);
   const authController = new AuthController(db);
   const linkController = new LinkController(db);
+  const meController = new MeController(db);
 
   // Note: Express stores a reference to the controller function but it loses the reference to the controller instance.
   router.get("/health", healthController.Get.bind(healthController));
@@ -48,6 +50,7 @@ function setupRoutes(db: Kysely<DB>) {
   router.get("/api/links/:code/stats", authMiddleware(db), linkController.Stats.bind(linkController));
 
   router.get("/x/:code", linkController.Redirect.bind(linkController));
+  router.get("/api/me", meController.Get.bind(meController));
 
   return router;
 }
@@ -69,4 +72,6 @@ function setupMiddleware(app: Express) {
  */
 function configApp(app: Express) {
   app.disable("x-powered-by");
+  // https://express-rate-limit.mintlify.app/guides/troubleshooting-proxy-issues#the-global-limiter-problem
+  app.set("trust proxy", 1);
 }

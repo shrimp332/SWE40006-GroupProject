@@ -1,7 +1,7 @@
 import { Options } from "express-rate-limit";
 
 export const rateLimitOptions: Partial<Options> = {
-  windowMs: 60 * 60,
+  windowMs: 60 * 60 * 1000,
   message: {
     data: null,
     message: "Timeout.",
