@@ -126,7 +126,7 @@ describe("getUserIdFromCookie", () => {
       .values({
         id: sessionIdFor(cookie),
         user_id: userId,
-        expires_at: new Date(Date.now() - 60_000),
+        expires_at: new Date(Date.now() - 86_400_000), // a day ago, so a clock difference with the database cannot matter
       })
       .execute();
 
