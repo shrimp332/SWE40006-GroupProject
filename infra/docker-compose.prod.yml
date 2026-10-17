@@ -2,7 +2,7 @@ name: url-shortener
 
 services:
   nginx:
-    image: ${NGINX_IMAGE}
+    image: ghcr.io/shrimp332/swe40006-groupproject-nginx:latest
     container_name: url-shortener-nginx
     restart: always
     ports:
@@ -17,7 +17,7 @@ services:
       start_period: 10s
 
   backend:
-    image: ${BACKEND_IMAGE}
+    image: ghcr.io/shrimp332/swe40006-groupproject-backend:latest
     container_name: url-shortener-backend
     restart: always
     environment:

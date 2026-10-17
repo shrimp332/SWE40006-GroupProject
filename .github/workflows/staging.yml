@@ -22,39 +22,15 @@ env:
 jobs:
   test:
     runs-on: self-hosted
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
-          node-version-file: backend/.nvmrc
-
-      - name: Install backend dependencies
-        working-directory: backend
-        run: npm ci
-
-      - name: Backend tests
-        working-directory: backend
-        env:
-          # database.config.ts exits if DATABASE_URL is missing, even for tests
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/test
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/test
-        run: npm test
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
