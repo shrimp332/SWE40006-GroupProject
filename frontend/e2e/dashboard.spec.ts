@@ -3,8 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 const email = "a@example.com";
 const password = "1234";
 
-// redirect destination
-const destination = "http://localhost:8080/favicon.svg";
+// redirect destination, on whichever host is under test
+const destination = `${process.env.E2E_BASE_URL ?? "http://localhost:8080"}/favicon.svg`;
 
 let code = "";
 
