@@ -1,5 +1,6 @@
 import LogoutButton from "./components/LogoutButton";
 import Dashboard from "./components/Dashboard"
+import AddRedirectDialog from "./components/AddRedirectDialog";
 
 function App() {
   return (
@@ -8,7 +9,10 @@ function App() {
         <p>Holy URL Shortner</p>
         <LogoutButton />
       </nav>
-      <main className="p-2"><Dashboard /></main>
+      <main className="p-2">
+        <AddRedirectDialog />
+        <Dashboard />
+      </main>
     </div>
   );
 }
