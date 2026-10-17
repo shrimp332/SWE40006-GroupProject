@@ -7,7 +7,7 @@ import { SESSION_COOKIE } from "../middlewares/auth.middleware";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const COOKIE_OPTIONS: CookieOptions = {
   httpOnly: true,
-  secure: false, // we don't have https yet, add: process.env.NODE_ENV === "production", later
+  secure: process.env.NODE_ENV === "production",
   sameSite: "lax",
   path: "/",
 };

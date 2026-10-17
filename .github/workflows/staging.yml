@@ -1,0 +1,155 @@
+name: Staging
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+env:
+  STAGING_HOST: 100.126.136.48
+  STAGING_USER: ${{ vars.STAGING_USER }}
+  STAGING_PATH: url-shortener
+  STAGING_URL: http://100.126.136.48:8080
+  BACKEND_IMAGE: url-shortener-backend:${{ github.sha }}
+  NGINX_IMAGE: url-shortener-nginx:${{ github.sha }}
+
+jobs:
+  test:
+    runs-on: self-hosted
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: backend/.nvmrc
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Backend tests
+        working-directory: backend
+        env:
+          # database.config.ts exits if DATABASE_URL is missing, even for tests
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/test
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/test
+        run: npm test
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend typecheck and lint
+        working-directory: frontend
+        run: |
+          npm run build
+          npm run lint
+
+  deploy:
+    needs: test
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build images
+        run: |
+          docker build -t "$BACKEND_IMAGE" ./backend
+          docker build -t "$NGINX_IMAGE" -f infra/nginx/Dockerfile .
+
+      - name: Ship images to staging
+        run: |
+          docker save "$BACKEND_IMAGE" "$NGINX_IMAGE" \
+            | gzip \
+            | ssh -o StrictHostKeyChecking=accept-new "$STAGING_USER@$STAGING_HOST" "gunzip -c | docker load"
+
+      - name: Copy the compose file and environment
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          ssh "$STAGING_USER@$STAGING_HOST" "mkdir -p $STAGING_PATH"
+          scp infra/docker-compose.staging.yml "$STAGING_USER@$STAGING_HOST:$STAGING_PATH/docker-compose.yml"
+          ssh "$STAGING_USER@$STAGING_HOST" "cat > $STAGING_PATH/.env" <<ENVFILE
+          HTTP_PORT=8080
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_DB=swe40006-db
+          BACKEND_IMAGE=$BACKEND_IMAGE
+          NGINX_IMAGE=$NGINX_IMAGE
+          ENVFILE
+
+      - name: Restart staging
+        run: |
+          ssh "$STAGING_USER@$STAGING_HOST" bash -s <<REMOTE
+          set -euo pipefail
+          cd $STAGING_PATH
+          # -v wipes the database, so each deploy starts with an empty users table
+          docker compose down -v
+          docker compose up -d
+          docker image prune -f
+          REMOTE
+
+      - name: Wait for staging to answer
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS -o /dev/null "$STAGING_URL"; then
+              echo "staging is up after ${attempt} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "staging did not come up within 120s"
+          exit 1
+
+  e2e:
+    needs: deploy
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: frontend/.nvmrc
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install chromium
+
+      - name: Playwright against staging
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: ${{ env.STAGING_URL }}
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
