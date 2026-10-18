@@ -3,3 +3,7 @@
 * {
   font-family: sans-serif;
 }
+
+dialog::backdrop {
+  background-color: rgb(0 0 0 / 0.4);
+}
