@@ -48,11 +48,11 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CERTBOT_EMAIL: ${{ vars.PROD_CERTBOT_EMAIL }}
         run: |
-          ssh "$PROD_USER@$PROD_HOST" bash -s <<REMOTE
+          ssh -o ServerAliveInterval=30 "$PROD_USER@$PROD_HOST" bash -s <<REMOTE
           set -euo pipefail
           cd $PROD_PATH
           echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker compose pull
+          docker compose pull --quiet
 
           if [ ! -d certbot/conf/live/$DOMAIN ]; then
             docker compose stop nginx || true
