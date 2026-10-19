@@ -1,7 +1,10 @@
 name: GHCR
 
+# Runs once the Staging workflow (build, lint, deploy, e2e) has passed on main.
 on:
-  push:
+  workflow_run:
+    workflows: [Staging]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -14,6 +17,7 @@ env:
 
 jobs:
   push:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: self-hosted
     permissions:
       contents: read
@@ -21,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Work out image names
         id: images

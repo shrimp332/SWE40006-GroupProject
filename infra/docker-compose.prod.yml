@@ -6,15 +6,37 @@ services:
     container_name: url-shortener-nginx
     restart: always
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    command:
+      - sh
+      - -c
+      - 'while :; do sleep 6h; nginx -s reload; done & exec nginx -g "daemon off;"'
     depends_on:
       - backend
+      - grafana
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: url-shortener-certbot
+    restart: always
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint:
+      - sh
+      - -c
+      - 'while :; do certbot renew --authenticator webroot --webroot-path /var/www/certbot --quiet; sleep 48h; done'
 
   backend:
     image: ghcr.io/shrimp332/swe40006-groupproject-backend:latest
@@ -61,7 +83,7 @@ services:
     container_name: url-shortener-prometheus
     restart: always
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
@@ -75,9 +97,9 @@ services:
     image: grafana/grafana:latest
     container_name: url-shortener-grafana
     restart: always
-    ports:
-      - "3000:3000"
     environment:
+      GF_SERVER_DOMAIN: grafana.mylocalbus.com
+      GF_SERVER_ROOT_URL: https://grafana.mylocalbus.com/
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_BASIC_ENABLED: "false"
