@@ -17,9 +17,14 @@ import { healthSchema } from "./validation-schemas/health.schema.ts/health.schem
 import { Kysely } from "kysely";
 import { DB } from "./types/kysely-types";
 import { MeController } from "./controllers/me.controller";
+import { metricsHandler, metricsMiddleware } from "./metrics";
 
 export function app(db: Kysely<DB>): Express {
   const app = express();
+
+  // Registered before the rate limiter so frequent scrapes are never throttled.
+  app.use(metricsMiddleware);
+  app.get("/metrics", metricsHandler);
 
   setupMiddleware(app);
   configApp(app);
