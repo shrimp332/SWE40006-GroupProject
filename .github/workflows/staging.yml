@@ -3,7 +3,9 @@ name: Staging
 on:
   pull_request:
     branches: [main]
-  push:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -21,6 +23,7 @@ env:
 
 jobs:
   test:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: self-hosted
 
     steps:

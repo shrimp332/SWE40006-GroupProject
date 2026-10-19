@@ -61,7 +61,7 @@ jobs:
               -m "$CERTBOT_EMAIL" -d $DOMAIN -d $GRAFANA_DOMAIN
           fi
 
-          docker compose up -d --remove-orphans
+          docker compose up -d --force-recreate --remove-orphans
           docker image prune -f
           REMOTE
 

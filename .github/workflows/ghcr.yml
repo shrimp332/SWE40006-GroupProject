@@ -49,8 +49,6 @@ jobs:
           context: ./backend
           push: true
           tags: ${{ steps.images.outputs.backend }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build and push nginx
         uses: docker/build-push-action@v6
@@ -59,8 +57,6 @@ jobs:
           file: infra/nginx/Dockerfile
           push: true
           tags: ${{ steps.images.outputs.nginx }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Summary
         run: |
