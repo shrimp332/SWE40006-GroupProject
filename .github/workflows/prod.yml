@@ -1,0 +1,71 @@
+name: Production
+
+# Runs once the Staging workflow (build, lint, deploy, e2e) has passed on main.
+on:
+  workflow_run:
+    workflows: [Staging]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+env:
+  PROD_HOST: 100.74.183.108
+  PROD_USER: ${{ vars.PROD_USER }}
+  PROD_PATH: url-shortener
+  DOMAIN: mylocalbus.com
+  GRAFANA_DOMAIN: grafana.mylocalbus.com
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Copy deployment files
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new "$PROD_USER@$PROD_HOST" "mkdir -p $PROD_PATH/nginx $PROD_PATH/certbot/www"
+          scp infra/docker-compose.prod.yml "$PROD_USER@$PROD_HOST:$PROD_PATH/docker-compose.yml"
+          scp infra/nginx/nginx.prod.conf "$PROD_USER@$PROD_HOST:$PROD_PATH/nginx/"
+          scp -r infra/prometheus infra/glances "$PROD_USER@$PROD_HOST:$PROD_PATH/"
+          ssh "$PROD_USER@$PROD_HOST" "umask 077; cat > $PROD_PATH/.env" <<ENVFILE
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_DB=swe40006-db
+          ENVFILE
+
+      - name: Deploy
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CERTBOT_EMAIL: ${{ vars.PROD_CERTBOT_EMAIL }}
+        run: |
+          ssh "$PROD_USER@$PROD_HOST" bash -s <<REMOTE
+          set -euo pipefail
+          cd $PROD_PATH
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker compose pull
+
+          if [ ! -d certbot/conf/live/$DOMAIN ]; then
+            docker compose stop nginx || true
+            docker run --rm -p 80:80 -v "\$PWD/certbot/conf:/etc/letsencrypt" \
+              certbot/certbot certonly --standalone --non-interactive --agree-tos \
+              -m "$CERTBOT_EMAIL" -d $DOMAIN -d $GRAFANA_DOMAIN
+          fi
+
+          docker compose up -d --remove-orphans
+          docker image prune -f
+          REMOTE
+
+      - name: Check production is up
+        run: |
+          curl -fsS --retry 30 --retry-delay 4 --retry-all-errors -o /dev/null "https://$DOMAIN/"
+          curl -fsS --retry 30 --retry-delay 4 --retry-all-errors -o /dev/null "https://$GRAFANA_DOMAIN/api/health"
