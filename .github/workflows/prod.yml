@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PROD_HOST: 100.74.183.108
+  PROD_HOST: 100.80.212.72
   PROD_USER: ${{ secrets.PROD_USER }}
   PROD_PATH: url-shortener
   DOMAIN: mylocalbus.com
