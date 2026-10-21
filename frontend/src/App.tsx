@@ -6,7 +6,7 @@ function App() {
   return (
     <div>
       <nav className="flex bg-zinc-100 items-center justify-between pl-2">
-        <p>UnHoly URL Shortner</p>
+        <p>Holy URL Shortner</p>
         <LogoutButton />
       </nav>
       <main className="p-2">
